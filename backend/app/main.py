@@ -202,6 +202,12 @@ def stream_search_and_harvest(req: SearchRequest):
             unique_new = raw_harvested
             duplicates_count = 0
         
+        # Assign IDs to unique_new papers upfront if not already present
+        existing_count = len(existing_papers)
+        for idx, p in enumerate(unique_new, 1):
+            if not p.get("id"):
+                p["id"] = f"P{existing_count + idx:03d}"
+
         ai_stats = {"INCLUDED": 0, "EXCLUDED": 0, "UNSURE": 0}
 
         # Phase 3: Optional Inline Real-Time AI Screening during Crawl
@@ -221,7 +227,7 @@ def stream_search_and_harvest(req: SearchRequest):
                 yield f"data: {json.dumps({'event': 'inline_screen_start', 'count': len(unique_new), 'model': req.model_name})}\n\n"
                 yield f": keep-alive\n\n"
                 
-                paper_map = {p["id"]: p for p in unique_new}
+                paper_map = {p.get("id"): p for p in unique_new if p.get("id")}
                 screened_counter = 0
 
                 for chunk_event in GeminiScreener.screen_papers_concurrent_generator(
