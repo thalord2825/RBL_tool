@@ -187,80 +187,101 @@ def stream_search_and_harvest(req: SearchRequest):
                     source_summaries[src_name] = {"count": 0, "status": "error", "error": str(ex), "duration_sec": 0}
                     yield f"data: {json.dumps({'event': 'source_done', 'source': src_name, 'count': 0, 'status': 'error', 'error': str(ex)})}\n\n"
 
-        # Deduplication phase
+        # Phase 2: Deduplication with Fault Isolation
         yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'DEDUP', 'raw_count': len(raw_harvested)})}\n\n"
         yield f"data: {json.dumps({'event': 'dedup_start', 'raw_count': len(raw_harvested)})}\n\n"
-        existing_papers = Database.get_all_papers(req.project_id)
-        unique_new, duplicates_count = DeduplicationEngine.deduplicate(existing_papers, raw_harvested)
+        
+        unique_new = raw_harvested
+        duplicates_count = 0
+        try:
+            existing_papers = Database.get_all_papers(req.project_id) or []
+            unique_new, duplicates_count = DeduplicationEngine.deduplicate(existing_papers, raw_harvested)
+        except Exception as dedup_err:
+            logger.error(f"Deduplication soft-fail: {dedup_err}")
+            yield f"data: {json.dumps({'event': 'stage_warning', 'stage': 'DEDUP', 'message': f'Deduplication fallback: {dedup_err}'})}\n\n"
+            unique_new = raw_harvested
+            duplicates_count = 0
         
         ai_stats = {"INCLUDED": 0, "EXCLUDED": 0, "UNSURE": 0}
 
-        # Optional Inline Real-Time AI Screening during Crawl
+        # Phase 3: Optional Inline Real-Time AI Screening during Crawl
         if unique_new and req.auto_screen:
-            protocol = Database.get_protocol(req.project_id) or {}
-            pico = protocol.get("pico") or {
-                "P": "Scam messages (SMS, Zalo, Messenger, Email) and fraudulent call scripts targeting users.",
-                "I": "Text classification based on Large Language Models (LLMs) or Pre-trained Language Models (PhoBERT).",
-                "C": "Traditional filtering mechanisms based on blacklists or keyword matching.",
-                "O": "Classification performance (Accuracy, Precision, Recall, Macro-F1), Latency, Cost."
-            }
-            ic_list = protocol.get("ic_list") or []
-            ec_list = protocol.get("ec_list") or []
+            try:
+                protocol = Database.get_protocol(req.project_id) or {}
+                pico = protocol.get("pico") or {
+                    "P": "Scam messages (SMS, Zalo, Messenger, Email) and fraudulent call scripts targeting users.",
+                    "I": "Text classification based on Large Language Models (LLMs) or Pre-trained Language Models (PhoBERT).",
+                    "C": "Traditional filtering mechanisms based on blacklists or keyword matching.",
+                    "O": "Classification performance (Accuracy, Precision, Recall, Macro-F1), Latency, Cost."
+                }
+                ic_list = protocol.get("ic_list") or []
+                ec_list = protocol.get("ec_list") or []
 
-            yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'AI_SCREEN', 'count': len(unique_new), 'model': req.model_name})}\n\n"
-            yield f"data: {json.dumps({'event': 'inline_screen_start', 'count': len(unique_new), 'model': req.model_name})}\n\n"
-            yield f": keep-alive\n\n"
-            
-            paper_map = {p["id"]: p for p in unique_new}
-            screened_counter = 0
-
-            for chunk_event in GeminiScreener.screen_papers_concurrent_generator(
-                papers=unique_new,
-                pico=pico,
-                ic_list=ic_list,
-                ec_list=ec_list,
-                api_key=req.api_key,
-                model_name=req.model_name,
-                research_context=req.research_context,
-                max_workers=3
-            ):
-                event_type = chunk_event.get("type")
-                if event_type == "warning":
-                    yield f"data: {json.dumps({'event': 'ai_warning', 'message': chunk_event.get('message', '')})}\n\n"
-                elif event_type == "chunk_warning":
-                    logger.warning(f"Chunk warning: {chunk_event.get('error')}")
-                elif event_type == "chunk_success":
-                    for eval_item in chunk_event.get("evaluations", []):
-                        pid = eval_item.get("id")
-                        p = paper_map.get(pid)
-                        if p:
-                            decision = eval_item.get("decision", "UNSURE")
-                            confidence = eval_item.get("confidence_score", 0.8)
-                            rationale = eval_item.get("scientific_rationale", "")
-                            exc_reason = eval_item.get("exclusion_reason")
-
-                            p["status"] = decision
-                            p["ai_decision"] = decision
-                            p["ai_confidence"] = confidence
-                            p["ai_rationale"] = rationale
-                            p["exclusion_reason"] = exc_reason
-
-                            if decision in ai_stats:
-                                ai_stats[decision] += 1
-                            screened_counter += 1
-
-                            yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': pid, 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats})}\n\n"
-
+                yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'AI_SCREEN', 'count': len(unique_new), 'model': req.model_name})}\n\n"
+                yield f"data: {json.dumps({'event': 'inline_screen_start', 'count': len(unique_new), 'model': req.model_name})}\n\n"
                 yield f": keep-alive\n\n"
+                
+                paper_map = {p["id"]: p for p in unique_new}
+                screened_counter = 0
 
-            if req.discard_excluded:
-                unique_new = [p for p in unique_new if p.get("status") != "EXCLUDED"]
+                for chunk_event in GeminiScreener.screen_papers_concurrent_generator(
+                    papers=unique_new,
+                    pico=pico,
+                    ic_list=ic_list,
+                    ec_list=ec_list,
+                    api_key=req.api_key,
+                    model_name=req.model_name,
+                    research_context=req.research_context,
+                    max_workers=3
+                ):
+                    event_type = chunk_event.get("type")
+                    if event_type == "warning":
+                        yield f"data: {json.dumps({'event': 'ai_warning', 'message': chunk_event.get('message', '')})}\n\n"
+                    elif event_type == "chunk_warning":
+                        logger.warning(f"Chunk warning: {chunk_event.get('error')}")
+                    elif event_type == "chunk_success":
+                        for eval_item in chunk_event.get("evaluations", []):
+                            pid = eval_item.get("id")
+                            p = paper_map.get(pid)
+                            if p:
+                                decision = eval_item.get("decision", "UNSURE")
+                                confidence = eval_item.get("confidence_score", 0.8)
+                                rationale = eval_item.get("scientific_rationale", "")
+                                exc_reason = eval_item.get("exclusion_reason")
 
-        if unique_new:
-            Database.save_papers(unique_new, project_id=req.project_id)
-            
-        all_current = Database.get_all_papers(req.project_id)
-        flagged_corpus = DeduplicationEngine.flag_corpus_duplicates(all_current)
+                                p["status"] = decision
+                                p["ai_decision"] = decision
+                                p["ai_confidence"] = confidence
+                                p["ai_rationale"] = rationale
+                                p["exclusion_reason"] = exc_reason
+
+                                if decision in ai_stats:
+                                    ai_stats[decision] += 1
+                                screened_counter += 1
+
+                                yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': pid, 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats})}\n\n"
+
+                    yield f": keep-alive\n\n"
+
+                if req.discard_excluded:
+                    unique_new = [p for p in unique_new if p.get("status") != "EXCLUDED"]
+            except Exception as ai_screen_err:
+                logger.error(f"Inline AI screening soft-fail: {ai_screen_err}")
+                yield f"data: {json.dumps({'event': 'ai_warning', 'message': f'AI screening interrupted ({ai_screen_err}); all papers saved as PENDING.'})}\n\n"
+
+        # Phase 4: Atomic DB Persistence & Final Corpus Retrieval
+        try:
+            if unique_new:
+                Database.save_papers(unique_new, project_id=req.project_id)
+        except Exception as save_err:
+            logger.error(f"Database save error in harvest: {save_err}")
+
+        try:
+            all_current = Database.get_all_papers(req.project_id) or []
+            flagged_corpus = DeduplicationEngine.flag_corpus_duplicates(all_current)
+        except Exception as flag_err:
+            logger.error(f"Corpus flag error in harvest: {flag_err}")
+            flagged_corpus = Database.get_all_papers(req.project_id) or []
 
         total_dur = round(time.time() - start_time, 2)
         yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'COMPLETE'})}\n\n"

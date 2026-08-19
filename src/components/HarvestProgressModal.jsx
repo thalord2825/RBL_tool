@@ -32,28 +32,32 @@ export default function HarvestProgressModal({
     uniqueCount = 0,
     isDone = false,
     duration = 0,
-    stage = 'CRAWL', // 'CRAWL' | 'DEDUP' | 'AI_SCREEN' | 'COMPLETE'
+    stage = 'CRAWL', // 'CRAWL' | 'DEDUP' | 'AI_SCREEN' | 'COMPLETE' | 'ERROR'
     autoScreen = false,
     modelName = 'Gemini 2.5 Flash',
     screenedCount = 0,
     totalToScreen = 0,
     screenLogs = [], // [{ paper_id, title, decision, confidence, exclusion_reason }]
     aiStats = { INCLUDED: 0, EXCLUDED: 0, UNSURE: 0 },
-    aiWarning = null
+    aiWarning = null,
+    error = null
   } = progress;
 
   const completedSources = Object.keys(sourceStatus).length;
   const totalSources = Math.max(1, sources.length);
   const crawlPercent = Math.min(100, Math.round((completedSources / totalSources) * 100));
 
+  const isError = stage === 'ERROR' || !!error;
+  const isFinished = isDone || isError;
+
   // Determine stage active states
-  const isCrawling = stage === 'CRAWL' && !isDone;
-  const isDeduping = stage === 'DEDUP' && !isDone;
-  const isScreening = stage === 'AI_SCREEN' && !isDone;
+  const isCrawling = stage === 'CRAWL' && !isFinished;
+  const isDeduping = stage === 'DEDUP' && !isFinished;
+  const isScreening = stage === 'AI_SCREEN' && !isFinished;
 
   const aiScreenPercent = totalToScreen > 0 
     ? Math.min(100, Math.round((screenedCount / totalToScreen) * 100)) 
-    : (isDone ? 100 : 0);
+    : (isFinished ? 100 : 0);
 
   return (
     <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-sans select-none animate-in fade-in duration-200">
@@ -84,7 +88,9 @@ export default function HarvestProgressModal({
                 )}
               </div>
               <h2 className="font-serif text-lg font-bold text-white tracking-wide">
-                {isDone 
+                {isError 
+                  ? 'Harvest Pipeline Interrupted' 
+                  : isFinished 
                   ? 'Harvest & Pipeline Finished' 
                   : autoScreen && isScreening 
                   ? 'Real-Time AI Screening in Progress...' 
@@ -93,7 +99,7 @@ export default function HarvestProgressModal({
             </div>
           </div>
 
-          {isDone ? (
+          {isFinished ? (
             <button
               onClick={onClose}
               className="px-4 py-1.5 bg-[#2D7A53] hover:bg-[#236142] text-white text-xs font-bold rounded-xs shadow-xs transition-colors cursor-pointer"
@@ -126,9 +132,9 @@ export default function HarvestProgressModal({
 
           {/* Step 2: Deduplication */}
           <div className={`flex items-center gap-1.5 ${
-            isDeduping ? 'text-[#FBBF24] animate-pulse' : (dedupCount > 0 || uniqueCount > 0 || isDone) ? 'text-[#4ADE80]' : 'text-[#7A766F]'
+            isDeduping ? 'text-[#FBBF24] animate-pulse' : (dedupCount > 0 || uniqueCount > 0 || isFinished) ? 'text-[#4ADE80]' : 'text-[#7A766F]'
           }`}>
-            {(dedupCount > 0 || uniqueCount > 0 || isDone) ? <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80]" /> : isDeduping ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" /> : <GitMerge className="w-3.5 h-3.5" />}
+            {(dedupCount > 0 || uniqueCount > 0 || isFinished) ? <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80]" /> : isDeduping ? <Loader2 className="w-3.5 h-3.5 animate-spin text-[#FBBF24]" /> : <GitMerge className="w-3.5 h-3.5" />}
             <span>2. Dedup</span>
           </div>
 
@@ -137,9 +143,9 @@ export default function HarvestProgressModal({
           {/* Step 3: AI Screening */}
           {autoScreen ? (
             <div className={`flex items-center gap-1.5 ${
-              isScreening ? 'text-[#818CF8] animate-pulse font-extrabold' : isDone ? 'text-[#4ADE80]' : 'text-[#7A766F]'
+              isScreening ? 'text-[#818CF8] animate-pulse font-extrabold' : isFinished ? 'text-[#4ADE80]' : 'text-[#7A766F]'
             }`}>
-              {isDone ? <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80]" /> : isScreening ? <Sparkles className="w-3.5 h-3.5 animate-spin text-[#818CF8]" /> : <Bot className="w-3.5 h-3.5" />}
+              {isFinished ? <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80]" /> : isScreening ? <Sparkles className="w-3.5 h-3.5 animate-spin text-[#818CF8]" /> : <Bot className="w-3.5 h-3.5" />}
               <span>3. AI Screen</span>
             </div>
           ) : (
@@ -152,9 +158,9 @@ export default function HarvestProgressModal({
 
           {/* Step 4: Storage */}
           <div className={`flex items-center gap-1.5 ${
-            isDone ? 'text-[#4ADE80]' : 'text-[#7A766F]'
+            isFinished ? 'text-[#4ADE80]' : 'text-[#7A766F]'
           }`}>
-            {isDone ? <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80]" /> : <Database className="w-3.5 h-3.5" />}
+            {isFinished ? <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80]" /> : <Database className="w-3.5 h-3.5" />}
             <span>4. SQLite Saved</span>
           </div>
 
@@ -163,6 +169,16 @@ export default function HarvestProgressModal({
         {/* Modal Body with Live Telemetry */}
         <div className="p-6 space-y-5 overflow-y-auto flex-1 bg-[#1A1917]">
           
+          {/* Error / Interruption Banner */}
+          {error && (
+            <div className="bg-[#2D1212] border border-[#DC2626] text-[#FCA5A5] p-3 rounded text-xs flex items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
+                <span>Stream notice: {error}. Successfully retrieved papers are preserved in database.</span>
+              </div>
+            </div>
+          )}
+
           {/* Progress Bar with Contextual Label */}
           <div className="space-y-1.5">
             <div className="flex justify-between text-xs font-bold">
@@ -170,22 +186,25 @@ export default function HarvestProgressModal({
                 {isCrawling && <span className="text-[#38BDF8]">Querying {totalSources} Academic Sources...</span>}
                 {isDeduping && <span className="text-[#FBBF24]">Running Canonical Deduplication...</span>}
                 {isScreening && <span className="text-[#818CF8]">Gemini AI Evaluating ({screenedCount}/{totalToScreen} Unique Records)...</span>}
-                {isDone && <span className="text-[#4ADE80]">Pipeline Complete! All records committed to SQLite.</span>}
+                {isFinished && !isError && <span className="text-[#4ADE80]">Pipeline Complete! All records committed to SQLite.</span>}
+                {isError && <span className="text-[#F87171]">Pipeline Stopped. Records saved to database.</span>}
               </span>
               <span className="text-[#A09B8E]">
-                {isDone ? `${duration}s` : autoScreen && isScreening ? `${aiScreenPercent}%` : `${crawlPercent}%`}
+                {isFinished ? `${duration}s` : autoScreen && isScreening ? `${aiScreenPercent}%` : `${crawlPercent}%`}
               </span>
             </div>
 
             <div className="w-full h-2.5 bg-[#2A2825] rounded-full overflow-hidden border border-[#3D3A35] p-0.5">
               <div
                 className={`h-full rounded-full transition-all duration-300 ease-out ${
-                  autoScreen && isScreening
+                  isError
+                    ? 'bg-[#EF4444]'
+                    : autoScreen && isScreening
                     ? 'bg-gradient-to-r from-[#4F46E5] via-[#818CF8] to-[#22C55E]'
                     : 'bg-gradient-to-r from-[#38BDF8] via-[#22C55E] to-[#EAB308]'
                 }`}
                 style={{ 
-                  width: `${Math.max(4, autoScreen && isScreening ? aiScreenPercent : crawlPercent)}%` 
+                  width: `${Math.max(4, isError ? 100 : autoScreen && isScreening ? aiScreenPercent : crawlPercent)}%` 
                 }}
               />
             </div>
@@ -274,9 +293,9 @@ export default function HarvestProgressModal({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               {sources.map(src => {
                 const info = sourceStatus[src];
-                const isFinished = !!info;
+                const isFinishedSource = !!info;
                 const isSuccess = info && info.status === 'ok';
-                const isError = info && info.status === 'error';
+                const isErrorSource = info && info.status === 'error';
 
                 return (
                   <div 
@@ -284,7 +303,7 @@ export default function HarvestProgressModal({
                     className={`p-2 rounded border flex items-center justify-between ${
                       isSuccess 
                         ? 'bg-[#142A1D] border-[#1E5237]' 
-                        : isError 
+                        : isErrorSource 
                         ? 'bg-[#2D1212] border-[#521E1E]' 
                         : 'bg-[#24221F] border-[#3D3A35]'
                     }`}
@@ -292,7 +311,7 @@ export default function HarvestProgressModal({
                     <div className="flex items-center gap-2">
                       {isSuccess ? (
                         <CheckCircle2 className="w-3.5 h-3.5 text-[#4ADE80] shrink-0" />
-                      ) : isError ? (
+                      ) : isErrorSource ? (
                         <AlertCircle className="w-3.5 h-3.5 text-[#F87171] shrink-0" />
                       ) : (
                         <Loader2 className="w-3.5 h-3.5 animate-spin text-[#38BDF8] shrink-0" />
@@ -306,12 +325,12 @@ export default function HarvestProgressModal({
                           +{info.count} ({info.duration_sec}s)
                         </span>
                       )}
-                      {isError && (
+                      {isErrorSource && (
                         <span className="text-[#F87171] truncate max-w-[90px]" title={info.error}>
                           {info.error || 'Skipped'}
                         </span>
                       )}
-                      {!isFinished && (
+                      {!isFinishedSource && (
                         <span className="text-[#38BDF8] italic">Querying...</span>
                       )}
                     </div>
@@ -322,7 +341,7 @@ export default function HarvestProgressModal({
           </div>
 
           {/* Comprehensive Yield & Dedup Metrics Footer */}
-          {isDone && (
+          {isFinished && (
             <div className="bg-[#121110] border border-[#2C2B29] p-3.5 rounded text-xs space-y-2">
               <div className="grid grid-cols-3 gap-2 text-center border-b border-[#2C2B29] pb-2">
                 <div>

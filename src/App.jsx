@@ -249,6 +249,8 @@ export default function App() {
             }
           } else if (eventData.event === 'dedup_start') {
             addLog('DEDUP', `Starting deduplication on ${eventData.raw_count} raw records...`);
+          } else if (eventData.event === 'stage_warning') {
+            addLog('WARN', `[${eventData.stage}] ${eventData.message}`);
           } else if (eventData.event === 'inline_screen_start') {
             addLog('AI_SCREEN', `⚡ Auto-Screening ${eventData.count} harvested papers using ${eventData.model}...`);
           } else if (eventData.event === 'ai_warning') {
@@ -280,11 +282,24 @@ export default function App() {
         },
         onError: (err) => {
           addLog('ERROR', `Harvest stream error: ${err.message}`);
-          alert(`Harvesting error: ${err.message}`);
+          setHarvestProgress(prev => ({
+            ...prev,
+            isDone: true,
+            stage: 'ERROR',
+            error: err.message
+          }));
+          fetchPapers();
         }
       });
     } catch (err) {
       addLog('ERROR', `Harvest failed: ${err.message}`);
+      setHarvestProgress(prev => ({
+        ...prev,
+        isDone: true,
+        stage: 'ERROR',
+        error: err.message
+      }));
+      fetchPapers();
     } finally {
       setIsHarvesting(false);
     }
