@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import json
+import time
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -9,8 +10,14 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "..", "rbl_corpus.db")
 class Database:
     @staticmethod
     def get_connection():
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=30000;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            pass
         return conn
 
     @classmethod
@@ -117,63 +124,68 @@ class Database:
 
     @classmethod
     def save_papers(cls, papers: List[Dict[str, Any]], project_id: str = "default") -> int:
-        with cls.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM papers WHERE project_id = ?", (project_id,))
-            current_count = cursor.fetchone()[0]
-            
-            inserted = 0
-            for p in papers:
-                p_id = p.get("id")
-                if not p_id:
-                    current_count += 1
-                    p_id = f"P{current_count:03d}"
+        for attempt in range(5):
+            try:
+                with cls.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM papers WHERE project_id = ?", (project_id,))
+                    current_count = cursor.fetchone()[0]
                     
-                created_at = p.get("created_at") or datetime.now().isoformat()
-                
-                cursor.execute("""
-                INSERT OR REPLACE INTO papers (
-                    id, project_id, title, authors, year, venue, abstract,
-                    doi, url, source, citations_count, status, exclusion_reason,
-                    relevance_notes, tool_model, dataset_name, sample_size_n,
-                    metrics_evaluated, empirical_results, code_url, limitations,
-                    ai_decision, ai_confidence, ai_rationale,
-                    duplicate_flag, duplicate_with_id, duplicate_reason, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    p_id,
-                    project_id,
-                    p.get("title", "Untitled"),
-                    p.get("authors", ""),
-                    p.get("year", 2024),
-                    p.get("venue", "N/A"),
-                    p.get("abstract", "N/A"),
-                    p.get("doi", "N/A"),
-                    p.get("url", ""),
-                    p.get("source", "ArXiv"),
-                    p.get("citations_count", 0),
-                    p.get("status", "PENDING"),
-                    p.get("exclusion_reason"),
-                    p.get("relevance_notes"),
-                    p.get("tool_model", "N/A"),
-                    p.get("dataset_name", "N/A"),
-                    p.get("sample_size_n", "N/A"),
-                    p.get("metrics_evaluated", "N/A"),
-                    p.get("empirical_results", "N/A"),
-                    p.get("code_url", "N/A"),
-                    p.get("limitations", "N/A"),
-                    p.get("ai_decision"),
-                    p.get("ai_confidence"),
-                    p.get("ai_rationale"),
-                    1 if p.get("duplicate_flag") else 0,
-                    p.get("duplicate_with_id"),
-                    p.get("duplicate_reason"),
-                    created_at
-                ))
-                inserted += 1
-            conn.commit()
-            return inserted
+                    inserted = 0
+                    for p in papers:
+                        p_id = p.get("id")
+                        if not p_id:
+                            current_count += 1
+                            p_id = f"P{current_count:03d}"
+                            
+                        created_at = p.get("created_at") or datetime.now().isoformat()
+                        cursor.execute("""
+                        INSERT OR REPLACE INTO papers (
+                            id, project_id, title, authors, year, venue, abstract,
+                            doi, url, source, citations_count, status, exclusion_reason,
+                            relevance_notes, tool_model, dataset_name, sample_size_n,
+                            metrics_evaluated, empirical_results, code_url, limitations,
+                            ai_decision, ai_confidence, ai_rationale,
+                            duplicate_flag, duplicate_with_id, duplicate_reason, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            p_id,
+                            project_id,
+                            p.get("title", "Untitled"),
+                            p.get("authors", ""),
+                            p.get("year", 2024),
+                            p.get("venue", "N/A"),
+                            p.get("abstract", "N/A"),
+                            p.get("doi", "N/A"),
+                            p.get("url", ""),
+                            p.get("source", "ArXiv"),
+                            p.get("citations_count", 0),
+                            p.get("status", "PENDING"),
+                            p.get("exclusion_reason"),
+                            p.get("relevance_notes"),
+                            p.get("tool_model", "N/A"),
+                            p.get("dataset_name", "N/A"),
+                            p.get("sample_size_n", "N/A"),
+                            p.get("metrics_evaluated", "N/A"),
+                            p.get("empirical_results", "N/A"),
+                            p.get("code_url", "N/A"),
+                            p.get("limitations", "N/A"),
+                            p.get("ai_decision"),
+                            p.get("ai_confidence"),
+                            p.get("ai_rationale"),
+                            1 if p.get("duplicate_flag") else 0,
+                            p.get("duplicate_with_id"),
+                            p.get("duplicate_reason"),
+                            created_at
+                        ))
+                        inserted += 1
+                    conn.commit()
+                    return inserted
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     @classmethod
     def update_paper(cls, paper_id: str, updates: Dict[str, Any], project_id: str = "default") -> Optional[Dict[str, Any]]:
