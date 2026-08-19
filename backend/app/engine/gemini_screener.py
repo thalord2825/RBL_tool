@@ -54,7 +54,8 @@ class GeminiScreener:
         ec_list: List[str],
         gemini_key: str,
         candidates_to_try: List[str],
-        research_question: str
+        research_question: str,
+        research_context: Optional[str] = ""
     ) -> List[Dict[str, Any]]:
         """
         Evaluates a single chunk of <= 10 papers using candidate models.
@@ -69,9 +70,20 @@ class GeminiScreener:
                 "abstract": p.get("abstract", "")
             })
 
+        context_block = ""
+        if research_context and research_context.strip():
+            context_block = f"""
+RESEARCHER CONTEXT & DOMAIN GUIDANCE (RELAXATION / PRIORITY DIRECTIVES):
+----------------------------------------------------------------------
+{research_context.strip()}
+----------------------------------------------------------------------
+NOTE: The lead researcher provided the above specific domain context, priority rules, and criteria relaxation guidance.
+If the researcher specifies relaxations (e.g. accepting Southeast Asian or global telecom SMS/phishing scam datasets when Vietnam-specific data is scarce, or including PLM transformer architectures), you MUST follow this researcher guidance with HIGHEST PRIORITY.
+"""
+
         system_instruction = f"""
 You are an expert Systematic Literature Review (SLR) screener adhering to PRISMA 2020 guidelines and strict scientific rigor.
-Your task is to evaluate the Title and Abstract of each candidate paper against the provided Research Question, PICO framework, Inclusion Criteria (IC), and Exclusion Criteria (EC).
+Your task is to evaluate the Title and Abstract of each candidate paper against the provided Research Question, PICO framework, Inclusion Criteria (IC), Exclusion Criteria (EC), and Researcher Guidance.
 
 RESEARCH QUESTION:
 {research_question}
@@ -87,9 +99,9 @@ INCLUSION CRITERIA (IC):
 
 EXCLUSION CRITERIA (EC):
 {chr(10).join(ec_list) if ec_list else "EC1: Non-textual network security. EC2: Non-reproducible study."}
-
+{context_block}
 DECISION RULES:
-1. "INCLUDED": Paper satisfies all primary ICs, matches 0 ECs, directly addresses PICO scope, and your confidence score is >= 0.80.
+1. "INCLUDED": Paper satisfies all primary ICs (considering researcher relaxation guidance), matches 0 ECs, directly addresses PICO scope, and your confidence score is >= 0.80.
 2. "EXCLUDED": Paper violates PICO scope or explicitly matches ANY Exclusion Criterion (EC1-EC5). You MUST specify the exact matched exclusion_reason (e.g., "EC1: Focuses on network packet headers").
 3. "UNSURE": The abstract is ambiguous, lacks concrete methodology, relevance is borderline, or your confidence is < 0.70.
 
@@ -102,7 +114,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
     "confidence_score": float (between 0.0 and 1.0),
     "matched_criteria": ["string"],
     "exclusion_reason": "string" or null,
-    "scientific_rationale": "Clear, objective sentence justifying decision based strictly on the abstract"
+    "scientific_rationale": "Clear, objective sentence justifying decision based strictly on the abstract and research guidance"
   }}
 ]
 """
@@ -155,6 +167,65 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         raise Exception(f"Gemini API Chunk Error: {last_error}")
 
     @classmethod
+    def screen_papers_batch(
+        cls,
+        papers: List[Dict[str, Any]],
+        pico: Dict[str, str],
+        ic_list: List[str],
+        ec_list: List[str],
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        research_question: str = "How effective are prompt-based LLMs (few-shot) compared with a fine-tuned PhoBERT model for Vietnamese scam message classification?",
+        research_context: Optional[str] = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        Synchronous batch screening for micro-batch inline stream harvesting.
+        """
+        gemini_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not gemini_key or not papers:
+            return []
+
+        available_models = cls.get_available_models(gemini_key)
+        candidates_to_try = []
+
+        if model_name and model_name != "auto":
+            clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
+            candidates_to_try.append(clean_m)
+
+        if available_models:
+            flash_models = [m for m in available_models if "flash" in m.lower() and "flash-lite" not in m.lower() and "-8b" not in m.lower()]
+            other_models = [m for m in available_models if m not in flash_models]
+            for m in flash_models + other_models:
+                if m not in candidates_to_try:
+                    candidates_to_try.append(m)
+
+        for fb in DEFAULT_FALLBACKS:
+            if fb not in candidates_to_try:
+                candidates_to_try.append(fb)
+
+        chunks = [papers[i:i + CHUNK_SIZE] for i in range(0, len(papers), CHUNK_SIZE)]
+        all_evals = []
+
+        for chunk in chunks:
+            try:
+                chunk_res = cls._evaluate_single_chunk(
+                    chunk_papers=chunk,
+                    pico=pico,
+                    ic_list=ic_list,
+                    ec_list=ec_list,
+                    gemini_key=gemini_key,
+                    candidates_to_try=candidates_to_try,
+                    research_question=research_question,
+                    research_context=research_context
+                )
+                if chunk_res:
+                    all_evals.extend(chunk_res)
+            except Exception as e:
+                logger.error(f"Batch chunk evaluation error: {e}")
+
+        return all_evals
+
+    @classmethod
     def screen_papers_stream(
         cls,
         papers: List[Dict[str, Any]],
@@ -164,6 +235,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         api_key: Optional[str] = None,
         model_name: Optional[str] = None,
         research_question: str = "How effective are prompt-based LLMs (few-shot) compared with a fine-tuned PhoBERT model for Vietnamese scam message classification?",
+        research_context: Optional[str] = "",
         project_id: str = "default"
     ) -> Generator[str, None, None]:
         """
@@ -241,7 +313,8 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                         ec_list=ec_list,
                         gemini_key=gemini_key,
                         candidates_to_try=candidates_to_try,
-                        research_question=research_question
+                        research_question=research_question,
+                        research_context=research_context
                     )
                     success = True
                 except Exception as e:

@@ -25,6 +25,12 @@ export default function App() {
   );
   const [sources, setSources] = useState(['ArXiv', 'OpenAlex', 'Semantic Scholar', 'CrossRef', 'Google Scholar']);
   const [sinceYear, setSinceYear] = useState(2020);
+  const [researchContext, setResearchContext] = useState(
+    'Prioritize Vietnamese SMS/Zalo/Messenger phishing and scam datasets. If scarce, accept Southeast Asian and international mobile phishing studies with transferable NLP/LLM classification architectures (relax strict Vietnam-only constraint).'
+  );
+  const [autoScreenOnHarvest, setAutoScreenOnHarvest] = useState(false);
+  const [autoScreenModel, setAutoScreenModel] = useState('gemini-2.5-flash');
+  const [discardExcludedOnHarvest, setDiscardExcludedOnHarvest] = useState(false);
   
   // UI & Loading State
   const [isLoading, setIsLoading] = useState(false);
@@ -205,6 +211,11 @@ export default function App() {
         sinceYear,
         limitPerSource: 25,
         projectId: 'default',
+        autoScreen: autoScreenOnHarvest,
+        researchContext,
+        apiKey: localStorage.getItem('gemini_api_key') || null,
+        modelName: autoScreenModel,
+        discardExcluded: discardExcludedOnHarvest,
         onEvent: (eventData) => {
           if (eventData.event === 'source_done') {
             const { source, count, status, error, duration_sec } = eventData;
@@ -222,6 +233,10 @@ export default function App() {
             }
           } else if (eventData.event === 'dedup_start') {
             addLog('DEDUP', `Starting deduplication on ${eventData.raw_count} raw records...`);
+          } else if (eventData.event === 'inline_screen_start') {
+            addLog('AI_SCREEN', `⚡ Auto-Screening ${eventData.count} harvested papers using ${eventData.model}...`);
+          } else if (eventData.event === 'paper_screened') {
+            addLog('AI_SCREEN', `[${eventData.paper_id}] ${eventData.decision} (${Math.round((eventData.confidence || 0.8) * 100)}%) — "${eventData.title}..."`);
           } else if (eventData.event === 'complete') {
             setPapers(eventData.papers || []);
             setHarvestProgress(prev => ({
@@ -596,6 +611,14 @@ export default function App() {
         setSources={setSources}
         sinceYear={sinceYear}
         setSinceYear={setSinceYear}
+        researchContext={researchContext}
+        setResearchContext={setResearchContext}
+        autoScreenOnHarvest={autoScreenOnHarvest}
+        setAutoScreenOnHarvest={setAutoScreenOnHarvest}
+        autoScreenModel={autoScreenModel}
+        setAutoScreenModel={setAutoScreenModel}
+        discardExcludedOnHarvest={discardExcludedOnHarvest}
+        setDiscardExcludedOnHarvest={setDiscardExcludedOnHarvest}
         onHarvest={handleHarvest}
         isHarvesting={isHarvesting}
       />

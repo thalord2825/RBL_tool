@@ -36,10 +36,9 @@ export default function TopHeader({
       </div>
 
       {/* Center: Sleek Compact Inline PRISMA Flow Capsule */}
-      <div className="hidden md:flex items-center gap-2.5 bg-[#24221F] border border-[#3D3A35] px-3.5 py-1 text-[11px] font-mono shadow-inner">
-        <div className="flex items-center gap-1.5 font-bold text-white">
-          <span className="text-[#A09B8E] text-[10px] font-normal uppercase">Identified:</span>
-          <span>{totalCount}</span>
+      <div className="hidden md:flex items-center gap-2.5 bg-[#24221F] border border-[#3D3A35] px-3 py-1 text-[11px] font-mono shadow-inner rounded">
+        <div className="font-bold text-white flex items-center gap-1" title="Total records in corpus">
+          <span className="bg-[#3D3A35] text-[#F4F1EA] px-2 py-0.5 rounded text-xs">{totalCount}</span>
         </div>
 
         <ArrowRight className="w-3 h-3 text-[#7A766F] shrink-0" />
@@ -61,8 +60,7 @@ export default function TopHeader({
         <ArrowRight className="w-3 h-3 text-[#7A766F] shrink-0" />
 
         <div className="flex items-center gap-1 text-[#38BDF8] font-bold" title="Fully extracted into 7-column evidence matrix">
-          <span className="text-[#A09B8E] text-[10px] font-normal uppercase">Extracted:</span>
-          <span>{extractedCount}</span>
+          <span>{extractedCount} Extracted</span>
         </div>
 
         {duplicatesCount > 0 && (

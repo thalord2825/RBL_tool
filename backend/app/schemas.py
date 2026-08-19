@@ -7,6 +7,11 @@ class SearchRequest(BaseModel):
     since_year: int = 2020
     limit_per_source: int = 25
     project_id: str = "default"
+    auto_screen: bool = False
+    research_context: Optional[str] = ""
+    api_key: Optional[str] = None
+    model_name: Optional[str] = "gemini-2.5-flash"
+    discard_excluded: bool = False
 
 class PaperUpdate(BaseModel):
     status: Optional[str] = None
@@ -30,6 +35,7 @@ class AiScreenRequest(BaseModel):
     api_key: Optional[str] = None
     model_name: Optional[str] = "auto"
     research_question: Optional[str] = "How effective are prompt-based LLMs (few-shot) compared with a fine-tuned PhoBERT model for Vietnamese scam message classification?"
+    research_context: Optional[str] = ""
     pico: Dict[str, str] = Field(default_factory=lambda: {
         "P": "Scam messages (SMS, Zalo, Messenger, Email) and fraudulent call scripts targeting users, particularly within the context of the Vietnamese language and community alert platforms.",
         "I": "Text classification based on Large Language Models (LLMs) utilizing In-context Learning techniques (Zero-shot, Few-shot, Few-shot + taxonomy) integrated into software systems.",

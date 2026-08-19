@@ -36,7 +36,20 @@ export const apiClient = {
   },
 
   // Real-Time Streaming Search & Harvest (SSE Stream)
-  streamHarvestPapers: async ({ query, sources, sinceYear, limitPerSource = 25, projectId = 'default', onEvent, onError }) => {
+  streamHarvestPapers: async ({
+    query,
+    sources,
+    sinceYear,
+    limitPerSource = 25,
+    projectId = 'default',
+    autoScreen = false,
+    researchContext = '',
+    apiKey = null,
+    modelName = 'gemini-2.5-flash',
+    discardExcluded = false,
+    onEvent,
+    onError
+  }) => {
     try {
       const response = await fetch(`${API_BASE_URL}/stream/harvest`, {
         method: 'POST',
@@ -47,6 +60,11 @@ export const apiClient = {
           since_year: parseInt(sinceYear, 10),
           limit_per_source: limitPerSource,
           project_id: projectId,
+          auto_screen: autoScreen,
+          research_context: researchContext,
+          api_key: apiKey,
+          model_name: modelName,
+          discard_excluded: discardExcluded,
         }),
       });
 
@@ -86,7 +104,7 @@ export const apiClient = {
   },
 
   // Real-Time Streaming AI Auto-Screen with Micro-Batches (SSE Stream)
-  streamAiScreenPapers: async ({ apiKey, modelName = 'auto', researchQuestion, pico, icList, ecList, paperIds, projectId = 'default', onEvent, onError }) => {
+  streamAiScreenPapers: async ({ apiKey, modelName = 'auto', researchQuestion, researchContext = '', pico, icList, ecList, paperIds, projectId = 'default', onEvent, onError }) => {
     try {
       const response = await fetch(`${API_BASE_URL}/stream/ai-screen`, {
         method: 'POST',
@@ -95,6 +113,7 @@ export const apiClient = {
           api_key: apiKey,
           model_name: modelName,
           research_question: researchQuestion,
+          research_context: researchContext,
           pico,
           ic_list: icList,
           ec_list: ecList,

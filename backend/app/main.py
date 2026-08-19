@@ -191,6 +191,56 @@ def stream_search_and_harvest(req: SearchRequest):
         existing_papers = Database.get_all_papers(req.project_id)
         unique_new, duplicates_count = DeduplicationEngine.deduplicate(existing_papers, raw_harvested)
         
+        # Optional Inline Real-Time AI Screening during Crawl
+        if unique_new and req.auto_screen:
+            protocol = Database.get_protocol(req.project_id) or {}
+            pico = protocol.get("pico") or {
+                "P": "Scam messages (SMS, Zalo, Messenger, Email) and fraudulent call scripts targeting users.",
+                "I": "Text classification based on Large Language Models (LLMs) or Pre-trained Language Models (PhoBERT).",
+                "C": "Traditional filtering mechanisms based on blacklists or keyword matching.",
+                "O": "Classification performance (Accuracy, Precision, Recall, Macro-F1), Latency, Cost."
+            }
+            ic_list = protocol.get("ic_list") or []
+            ec_list = protocol.get("ec_list") or []
+
+            yield f"data: {json.dumps({'event': 'inline_screen_start', 'count': len(unique_new), 'model': req.model_name})}\n\n"
+            
+            evaluations = GeminiScreener.screen_papers_batch(
+                papers=unique_new,
+                pico=pico,
+                ic_list=ic_list,
+                ec_list=ec_list,
+                api_key=req.api_key,
+                model_name=req.model_name,
+                research_context=req.research_context
+            )
+
+            eval_map = {e["id"]: e for e in evaluations if "id" in e}
+            screened_unique = []
+
+            for p in unique_new:
+                e_info = eval_map.get(p["id"])
+                if e_info:
+                    decision = e_info.get("decision", "PENDING")
+                    confidence = e_info.get("confidence_score", 0.8)
+                    rationale = e_info.get("scientific_rationale", "")
+                    exc_reason = e_info.get("exclusion_reason")
+
+                    p["status"] = decision
+                    p["ai_decision"] = decision
+                    p["ai_confidence"] = confidence
+                    p["ai_rationale"] = rationale
+                    p["exclusion_reason"] = exc_reason
+
+                    yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': p['id'], 'title': p.get('title', '')[:60], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason})}\n\n"
+                
+                # Check discard_excluded setting
+                if req.discard_excluded and p.get("status") == "EXCLUDED":
+                    continue
+                screened_unique.append(p)
+
+            unique_new = screened_unique
+
         if unique_new:
             Database.save_papers(unique_new, project_id=req.project_id)
             
@@ -230,6 +280,7 @@ def stream_ai_screening(req: AiScreenRequest):
             api_key=req.api_key,
             model_name=req.model_name,
             research_question=req.research_question or "",
+            research_context=req.research_context or "",
             project_id=req.project_id
         ),
         media_type="text/event-stream"
