@@ -256,12 +256,21 @@ export default function App() {
           } else if (eventData.event === 'ai_warning') {
             setHarvestProgress(prev => ({ ...prev, aiWarning: eventData.message }));
             addLog('WARN', `AI Screening: ${eventData.message}`);
+          } else if (eventData.event === 'ai_rate_limit') {
+            setHarvestProgress(prev => ({
+              ...prev,
+              rateLimitNotice: eventData.message,
+              coolingModels: eventData.cooling_models || prev?.coolingModels
+            }));
+            addLog('WARN', `Circuit Breaker: ${eventData.message}`);
           } else if (eventData.event === 'paper_screened') {
             setHarvestProgress(prev => ({
               ...prev,
               screenedCount: eventData.screened_count || (prev.screenedCount + 1),
               totalToScreen: eventData.total_to_screen || prev.totalToScreen,
               aiStats: eventData.ai_stats || prev.aiStats,
+              activeModel: eventData.active_model || prev.activeModel,
+              coolingModels: eventData.cooling_models || prev.coolingModels,
               screenLogs: [...(prev.screenLogs || []).slice(-29), eventData]
             }));
             addLog('AI_SCREEN', `[${eventData.paper_id}] ${eventData.decision} (${Math.round((eventData.confidence || 0.8) * 100)}%) — "${eventData.title}..."`);
@@ -365,12 +374,21 @@ export default function App() {
               total: eventData.total_papers || prev?.total || totalToScreen,
               activeModel: eventData.active_model || 'Gemini Flash'
             }));
+          } else if (eventData.event === 'ai_rate_limit') {
+            setAiProgress(prev => ({
+              ...prev,
+              rateLimitNotice: eventData.message,
+              coolingModels: eventData.cooling_models || prev?.coolingModels
+            }));
+            addLog('WARN', `Circuit Breaker: ${eventData.message}`);
           } else if (eventData.event === 'chunk_start') {
             addLog('AI_SCREEN', `Processing chunk ${eventData.chunk_idx}/${eventData.total_chunks} (${eventData.chunk_size} papers)...`);
             setAiProgress(prev => ({
               ...(prev || initialProgress),
               currentChunk: eventData.chunk_idx,
-              totalChunks: eventData.total_chunks
+              totalChunks: eventData.total_chunks,
+              activeModel: eventData.active_model || prev?.activeModel,
+              coolingModels: eventData.cooling_models || prev?.coolingModels
             }));
           } else if (eventData.event === 'paper_evaluated') {
             const { 

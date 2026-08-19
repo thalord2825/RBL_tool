@@ -243,9 +243,13 @@ def stream_search_and_harvest(req: SearchRequest):
                     event_type = chunk_event.get("type")
                     if event_type == "warning":
                         yield f"data: {json.dumps({'event': 'ai_warning', 'message': chunk_event.get('message', '')})}\n\n"
+                    elif event_type == "ai_rate_limit":
+                        yield f"data: {json.dumps({'event': 'ai_rate_limit', 'model': chunk_event.get('model'), 'cooldown_sec': chunk_event.get('cooldown_sec', 60), 'message': chunk_event.get('message'), 'cooling_models': chunk_event.get('cooling_models', {})})}\n\n"
                     elif event_type == "chunk_warning":
                         logger.warning(f"Chunk warning: {chunk_event.get('error')}")
                     elif event_type == "chunk_success":
+                        used_m = chunk_event.get("used_model", "")
+                        cooling_m = chunk_event.get("cooling_models", {})
                         for eval_item in chunk_event.get("evaluations", []):
                             pid = eval_item.get("id")
                             p = paper_map.get(pid)
@@ -265,7 +269,7 @@ def stream_search_and_harvest(req: SearchRequest):
                                     ai_stats[decision] += 1
                                 screened_counter += 1
 
-                                yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': pid, 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats})}\n\n"
+                                yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': pid, 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats, 'active_model': used_m, 'cooling_models': cooling_m})}\n\n"
 
                     yield f": keep-alive\n\n"
 

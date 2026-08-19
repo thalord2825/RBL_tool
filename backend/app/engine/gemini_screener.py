@@ -5,7 +5,7 @@ import time
 import random
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Optional, Generator
+from typing import List, Dict, Any, Optional, Generator, Tuple
 from ..database import Database
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,41 @@ MICRO_CHUNK_SIZE = 8  # 8 papers per chunk for fast, high-quality batch evaluati
 class GeminiScreener:
     _cached_models: Optional[List[str]] = None
     _cached_key: Optional[str] = None
+    _model_cooldowns: Dict[str, float] = {}  # { model_id: expiry_timestamp }
+
+    @classmethod
+    def get_cooling_models(cls) -> Dict[str, float]:
+        """
+        Returns a dict of all models currently cooling down with remaining seconds.
+        """
+        now = time.time()
+        cooling = {}
+        for m, exp in list(cls._model_cooldowns.items()):
+            rem = exp - now
+            if rem > 0:
+                cooling[m] = round(rem, 1)
+            else:
+                cls._model_cooldowns.pop(m, None)
+        return cooling
+
+    @classmethod
+    def is_model_cooling_down(cls, model_name: str) -> Tuple[bool, float]:
+        """
+        Checks if a model is currently on rate-limit cooldown.
+        """
+        exp = cls._model_cooldowns.get(model_name, 0.0)
+        remaining = exp - time.time()
+        if remaining > 0:
+            return True, round(remaining, 1)
+        return False, 0.0
+
+    @classmethod
+    def set_model_cooldown(cls, model_name: str, duration_sec: float = 60.0):
+        """
+        Puts a model on rate-limit cooldown (e.g. 60 seconds) so future requests bypass it instantly.
+        """
+        cls._model_cooldowns[model_name] = time.time() + duration_sec
+        logger.info(f"Model-Level Circuit Breaker: {model_name} cooling down for {duration_sec}s")
 
     @classmethod
     def get_available_models(cls, api_key: str) -> List[str]:
@@ -53,27 +88,41 @@ class GeminiScreener:
 
     @classmethod
     def _build_candidate_models(cls, api_key: str, model_name: Optional[str] = None) -> List[str]:
-        candidates = []
+        """
+        Builds prioritized list of candidate models, pushing models on cooldown to the back.
+        """
+        raw_candidates = []
         
         # User selected model
         if model_name and model_name != "auto":
             clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
-            # Strip invalid gemini-3 references if present in older localStorage
             if "gemini-3" in clean_m:
                 clean_m = "models/gemini-2.0-flash"
-            candidates.append(clean_m)
+            raw_candidates.append(clean_m)
 
         # Dynamic query
         available = cls.get_available_models(api_key)
         for m in available:
-            if m not in candidates and any(k in m for k in ["flash", "pro"]):
-                candidates.append(m)
+            if m not in raw_candidates and any(k in m for k in ["flash", "pro"]):
+                raw_candidates.append(m)
 
         for fb in VALID_DEFAULT_MODELS:
-            if fb not in candidates:
-                candidates.append(fb)
+            if fb not in raw_candidates:
+                raw_candidates.append(fb)
 
-        return candidates
+        # Sort: Active models first (zero cooldown), cooling models at the back sorted by earliest expiration
+        active = []
+        cooling = []
+        for m in raw_candidates:
+            is_cool, rem = cls.is_model_cooling_down(m)
+            if is_cool:
+                cooling.append((rem, m))
+            else:
+                active.append(m)
+
+        cooling.sort(key=lambda x: x[0])
+        sorted_candidates = active + [m for _, m in cooling]
+        return sorted_candidates
 
     @classmethod
     def _evaluate_single_chunk(
@@ -86,9 +135,10 @@ class GeminiScreener:
         candidates_to_try: List[str],
         research_question: str,
         research_context: Optional[str] = ""
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], str, List[Dict[str, Any]]]:
         """
-        Evaluates a single micro-chunk (<= 8 papers) with adaptive retry on 429 and fast 404 bypass.
+        Evaluates a single micro-chunk (<= 8 papers).
+        Returns: (evaluations, used_model, cooldown_events)
         """
         papers_payload = []
         for p in chunk_papers:
@@ -167,68 +217,80 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         }
 
         last_error = "No candidate models responded successfully"
+        cooldown_events = []
 
         for model_id in candidates_to_try:
+            # Check if this model is currently on cooldown; if so, only try if no active models remain
+            is_cool, rem_cool = cls.is_model_cooling_down(model_id)
+            if is_cool and len(candidates_to_try) > 1:
+                # Skip cooling model immediately
+                continue
+
             for api_ver in ["v1beta", "v1"]:
                 url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
                 
-                for attempt in range(4):
-                    try:
-                        response = requests.post(url, headers=headers, json=payload, timeout=22)
-                        if response.status_code == 200:
-                            result_json = response.json()
-                            candidates = result_json.get("candidates", [])
-                            if not candidates:
-                                continue
-
-                            raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]")
-                            cleaned_text = raw_text.strip()
-                            if cleaned_text.startswith("```json"):
-                                cleaned_text = cleaned_text[7:]
-                            if cleaned_text.startswith("```"):
-                                cleaned_text = cleaned_text[3:]
-                            if cleaned_text.endswith("```"):
-                                cleaned_text = cleaned_text[:-3]
-                            cleaned_text = cleaned_text.strip()
-
-                            evaluations = json.loads(cleaned_text)
-                            if not isinstance(evaluations, list):
-                                evaluations = [evaluations] if isinstance(evaluations, dict) else []
-
-                            # Guarantee every chunk paper has an evaluation item
-                            eval_map = {e.get("id"): e for e in evaluations if isinstance(e, dict) and e.get("id")}
-                            final_evals = []
-                            for p in chunk_papers:
-                                pid = p.get("id")
-                                if pid in eval_map:
-                                    final_evals.append(eval_map[pid])
-                                else:
-                                    final_evals.append({
-                                        "id": pid,
-                                        "decision": "PENDING",
-                                        "confidence_score": 0.5,
-                                        "matched_criteria": [],
-                                        "exclusion_reason": None,
-                                        "scientific_rationale": "Pending manual review"
-                                    })
-                            return final_evals
-
-                        elif response.status_code in [429, 503]:
-                            backoff = 3.0 * (attempt + 1) + random.uniform(0.2, 0.8)
-                            logger.warning(f"Gemini API rate limit 429 on {model_id} (attempt {attempt+1}/4). Backing off {backoff:.1f}s...")
-                            time.sleep(backoff)
+                try:
+                    response = requests.post(url, headers=headers, json=payload, timeout=22)
+                    if response.status_code == 200:
+                        result_json = response.json()
+                        candidates = result_json.get("candidates", [])
+                        if not candidates:
                             continue
-                        elif response.status_code == 404:
-                            # Non-existent model on this endpoint, skip to next candidate immediately
-                            last_error = f"HTTP 404: Model {model_id} not available"
-                            break
-                        else:
-                            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-                            break
-                    except Exception as e:
-                        last_error = str(e)
-                        time.sleep(1.0)
-                        continue
+
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]")
+                        cleaned_text = raw_text.strip()
+                        if cleaned_text.startswith("```json"):
+                            cleaned_text = cleaned_text[7:]
+                        if cleaned_text.startswith("```"):
+                            cleaned_text = cleaned_text[3:]
+                        if cleaned_text.endswith("```"):
+                            cleaned_text = cleaned_text[:-3]
+                        cleaned_text = cleaned_text.strip()
+
+                        evaluations = json.loads(cleaned_text)
+                        if not isinstance(evaluations, list):
+                            evaluations = [evaluations] if isinstance(evaluations, dict) else []
+
+                        # Guarantee every chunk paper has an evaluation item
+                        eval_map = {e.get("id"): e for e in evaluations if isinstance(e, dict) and e.get("id")}
+                        final_evals = []
+                        for p in chunk_papers:
+                            pid = p.get("id")
+                            if pid in eval_map:
+                                final_evals.append(eval_map[pid])
+                            else:
+                                final_evals.append({
+                                    "id": pid,
+                                    "decision": "PENDING",
+                                    "confidence_score": 0.5,
+                                    "matched_criteria": [],
+                                    "exclusion_reason": None,
+                                    "scientific_rationale": "Pending manual review"
+                                })
+                        return final_evals, model_id, cooldown_events
+
+                    elif response.status_code in [429, 503]:
+                        # Activate 60s cooldown on this model
+                        cls.set_model_cooldown(model_id, 60.0)
+                        cooldown_events.append({
+                            "event": "ai_rate_limit",
+                            "model": model_id,
+                            "cooldown_sec": 60,
+                            "message": f"Quota limit reached on {model_id}. Activated 60s cooldown; auto-routing to alternative model."
+                        })
+                        logger.warning(f"Quota rate-limit (429) on {model_id}. Activated 60s cooldown.")
+                        break # Switch to next candidate model immediately!
+
+                    elif response.status_code == 404:
+                        # Non-existent model on this endpoint, skip to next candidate immediately
+                        last_error = f"HTTP 404: Model {model_id} not available"
+                        break
+                    else:
+                        last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                        break
+                except Exception as e:
+                    last_error = str(e)
+                    continue
 
         raise Exception(f"Gemini API Error: {last_error}")
 
@@ -247,7 +309,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
     ) -> Generator[Dict[str, Any], None, None]:
         """
         High-throughput parallel micro-batch generator for real-time stream harvesting.
-        Yields chunk evaluation items concurrently as they finish with rate-limit pacing.
+        Yields chunk evaluation items concurrently with model cooldowns & live diagnostics.
         """
         gemini_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not gemini_key:
@@ -260,25 +322,28 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
 
         candidates_to_try = cls._build_candidate_models(gemini_key, model_name)
         chunks = [papers[i:i + MICRO_CHUNK_SIZE] for i in range(0, len(papers), MICRO_CHUNK_SIZE)]
+        total_chunks = len(chunks)
 
         def process_chunk(chunk_idx, chunk):
             st = time.time()
             try:
-                res = cls._evaluate_single_chunk(
+                # Dynamic candidate resolution for each chunk to respect latest cooldown states
+                dyn_candidates = cls._build_candidate_models(gemini_key, model_name)
+                res, used_model, cooldowns = cls._evaluate_single_chunk(
                     chunk_papers=chunk,
                     pico=pico,
                     ic_list=ic_list,
                     ec_list=ec_list,
                     gemini_key=gemini_key,
-                    candidates_to_try=candidates_to_try,
+                    candidates_to_try=dyn_candidates,
                     research_question=research_question,
                     research_context=research_context
                 )
                 dur = round(time.time() - st, 2)
-                return chunk_idx, chunk, res, None, dur
+                return chunk_idx, chunk, res, used_model, cooldowns, None, dur
             except Exception as ex:
                 dur = round(time.time() - st, 2)
-                return chunk_idx, chunk, [], str(ex), dur
+                return chunk_idx, chunk, [], "", [], str(ex), dur
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
@@ -288,21 +353,35 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
 
             for future in as_completed(futures):
                 try:
-                    c_idx, chunk, evals, err, dur = future.result()
+                    c_idx, chunk, evals, used_model, cooldowns, err, dur = future.result()
+                    
+                    # Yield any cooldown notifications immediately
+                    for cd in cooldowns:
+                        yield {
+                            "type": "ai_rate_limit",
+                            "model": cd.get("model"),
+                            "cooldown_sec": cd.get("cooldown_sec", 60),
+                            "message": cd.get("message"),
+                            "cooling_models": cls.get_cooling_models()
+                        }
+
                     if err:
                         logger.warning(f"Micro-chunk {c_idx} evaluation warning: {err}")
                         yield {
                             "type": "chunk_warning",
                             "chunk_idx": c_idx,
                             "error": err,
-                            "chunk": chunk
+                            "chunk": chunk,
+                            "cooling_models": cls.get_cooling_models()
                         }
                     else:
                         yield {
                             "type": "chunk_success",
                             "chunk_idx": c_idx,
                             "evaluations": evals,
-                            "duration_sec": dur
+                            "used_model": used_model,
+                            "duration_sec": dur,
+                            "cooling_models": cls.get_cooling_models()
                         }
                 except Exception as fut_err:
                     logger.error(f"Future error in concurrent screening: {fut_err}")
@@ -339,7 +418,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         chunks = [papers[i:i + MICRO_CHUNK_SIZE] for i in range(0, total_papers, MICRO_CHUNK_SIZE)]
         total_chunks = len(chunks)
 
-        yield f"data: {json.dumps({'event': 'init', 'total_papers': total_papers, 'total_chunks': total_chunks, 'chunk_size': MICRO_CHUNK_SIZE, 'active_model': active_model})}\n\n"
+        yield f"data: {json.dumps({'event': 'init', 'total_papers': total_papers, 'total_chunks': total_chunks, 'chunk_size': MICRO_CHUNK_SIZE, 'active_model': active_model, 'cooling_models': cls.get_cooling_models()})}\n\n"
 
         stats = {"INCLUDED": 0, "EXCLUDED": 0, "UNSURE": 0}
         evaluated_count = 0
@@ -348,19 +427,26 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
 
         for chunk_idx, chunk in enumerate(chunks, 1):
             chunk_start = time.time()
-            yield f"data: {json.dumps({'event': 'chunk_start', 'chunk_idx': chunk_idx, 'total_chunks': total_chunks, 'chunk_size': len(chunk)})}\n\n"
+            dyn_candidates = cls._build_candidate_models(gemini_key, model_name)
+            current_model = dyn_candidates[0] if dyn_candidates else active_model
+
+            yield f"data: {json.dumps({'event': 'chunk_start', 'chunk_idx': chunk_idx, 'total_chunks': total_chunks, 'chunk_size': len(chunk), 'active_model': current_model, 'cooling_models': cls.get_cooling_models()})}\n\n"
 
             try:
-                evals = cls._evaluate_single_chunk(
+                evals, used_model, cooldowns = cls._evaluate_single_chunk(
                     chunk_papers=chunk,
                     pico=pico,
                     ic_list=ic_list,
                     ec_list=ec_list,
                     gemini_key=gemini_key,
-                    candidates_to_try=candidates_to_try,
+                    candidates_to_try=dyn_candidates,
                     research_question=research_question,
                     research_context=research_context
                 )
+
+                # Emit any cooldown events that occurred
+                for cd in cooldowns:
+                    yield f"data: {json.dumps({'event': 'ai_rate_limit', 'model': cd.get('model'), 'cooldown_sec': cd.get('cooldown_sec', 60), 'message': cd.get('message'), 'cooling_models': cls.get_cooling_models()})}\n\n"
 
                 for item in evals:
                     paper_id = item.get("id")
@@ -396,13 +482,13 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                     eta = int(remaining * avg_per_paper)
 
                     paper_meta = paper_map.get(paper_id, {})
-                    yield f"data: {json.dumps({'event': 'paper_evaluated', 'paper_id': paper_id, 'title': paper_meta.get('title', ''), 'year': paper_meta.get('year', ''), 'source': paper_meta.get('source', ''), 'decision': decision, 'confidence': confidence, 'exclusion_reason': exclusion_reason, 'rationale': rationale, 'matched_criteria': item.get('matched_criteria', []), 'raw_json': item, 'evaluated_count': evaluated_count, 'total_papers': total_papers, 'progress_percent': round((evaluated_count / total_papers) * 100, 1), 'stats': stats, 'eta_seconds': eta, 'latency_seconds': round(time.time() - chunk_start, 2)})}\n\n"
+                    yield f"data: {json.dumps({'event': 'paper_evaluated', 'paper_id': paper_id, 'title': paper_meta.get('title', ''), 'year': paper_meta.get('year', ''), 'source': paper_meta.get('source', ''), 'decision': decision, 'confidence': confidence, 'exclusion_reason': exclusion_reason, 'rationale': rationale, 'matched_criteria': item.get('matched_criteria', []), 'raw_json': item, 'evaluated_count': evaluated_count, 'total_papers': total_papers, 'progress_percent': round((evaluated_count / total_papers) * 100, 1), 'stats': stats, 'eta_seconds': eta, 'latency_seconds': round(time.time() - chunk_start, 2), 'active_model': used_model, 'cooling_models': cls.get_cooling_models()})}\n\n"
 
             except Exception as e:
                 logger.error(f"Chunk {chunk_idx} failed: {e}")
-                yield f"data: {json.dumps({'event': 'chunk_error', 'chunk_idx': chunk_idx, 'error': str(e)})}\n\n"
+                yield f"data: {json.dumps({'event': 'chunk_error', 'chunk_idx': chunk_idx, 'error': str(e), 'cooling_models': cls.get_cooling_models()})}\n\n"
 
-            time.sleep(0.4)  # Smooth rate-limit pacing between sequential chunks
+            time.sleep(0.3)  # Smooth rate-limit pacing between sequential chunks
             yield f": heartbeat\n\n"
 
         final_papers = Database.get_all_papers(project_id)

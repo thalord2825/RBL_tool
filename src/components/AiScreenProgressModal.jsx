@@ -212,7 +212,7 @@ export default function AiScreenProgressModal({
         </div>
 
         {/* Granular Progress Summary Strip */}
-        <div className="bg-[#EFECE4] border-b border-[#DCD6C5] px-6 py-2.5 flex items-center justify-between shrink-0 text-xs">
+        <div className="bg-[#EFECE4] border-b border-[#DCD6C5] px-6 py-2.5 flex items-center justify-between shrink-0 text-xs flex-wrap gap-2">
           <div className="flex items-center gap-3">
             <span className="w-2 h-2 rounded-full bg-[#D94E28] animate-ping inline-block"></span>
             <span className="font-bold text-[#1A1917]">
@@ -225,11 +225,24 @@ export default function AiScreenProgressModal({
             </span>
           </div>
 
-          <div className="flex items-center gap-2 text-[11px]">
+          <div className="flex items-center gap-2 text-[11px] flex-wrap">
             <span className="text-[#7A766F] font-semibold">Model:</span>
-            <span className="bg-[#EDE9DF] border border-[#C8C1AE] px-2 py-0.5 text-[#6B46C1] font-bold rounded">
-              {typeof activeModel === 'string' ? activeModel.replace('models/', '') : 'gemini-2.5-flash'}
+            <span className="bg-[#EDE9DF] border border-[#C8C1AE] px-2 py-0.5 text-[#6B46C1] font-bold rounded flex items-center gap-1">
+              <Sparkles className="w-2.5 h-2.5 text-[#6B46C1]" />
+              <span>{typeof activeModel === 'string' ? activeModel.replace('models/', '') : 'gemini-2.0-flash'}</span>
             </span>
+
+            {/* Cooling models */}
+            {progress?.coolingModels && Object.entries(progress.coolingModels).map(([cModel, rem]) => (
+              <span 
+                key={cModel} 
+                className="bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] px-1.5 py-0.5 text-[10px] font-bold rounded flex items-center gap-1"
+                title={`${cModel} is resting to replenish quota (${rem}s left)`}
+              >
+                <Clock className="w-2.5 h-2.5 text-[#F59E0B] animate-spin" />
+                <span>{cModel.replace('models/', '')} ({rem}s)</span>
+              </span>
+            ))}
           </div>
         </div>
 
@@ -243,6 +256,17 @@ export default function AiScreenProgressModal({
 
         {/* Modal Scrollable Content (Warm Light Theme) */}
         <div className="flex-1 overflow-y-auto p-6 space-y-3.5 bg-[#F4F1EA]">
+          
+          {/* Rate-Limit / Cooldown Banner */}
+          {progress?.rateLimitNotice && (
+            <div className="bg-[#FFFBEB] border border-[#F59E0B] text-[#92400E] p-2.5 rounded text-xs flex items-start gap-2.5 animate-in fade-in">
+              <Clock className="w-4 h-4 text-[#F59E0B] shrink-0 mt-0.5 animate-spin" />
+              <div className="space-y-0.5 flex-1">
+                <span className="font-bold">Circuit Breaker & Rate-Limit Cooldown:</span>
+                <p className="text-[11px] leading-snug">{progress.rateLimitNotice}</p>
+              </div>
+            </div>
+          )}
           
           {/* TAB 1: REAL-TIME STREAM & API RESPONSE INSPECTOR */}
           {activeTab === 'STREAM' && (

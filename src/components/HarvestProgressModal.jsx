@@ -34,7 +34,10 @@ export default function HarvestProgressModal({
     duration = 0,
     stage = 'CRAWL', // 'CRAWL' | 'DEDUP' | 'AI_SCREEN' | 'COMPLETE' | 'ERROR'
     autoScreen = false,
-    modelName = 'Gemini 2.5 Flash',
+    modelName = 'Gemini 2.0 Flash',
+    activeModel = null,
+    coolingModels = {},
+    rateLimitNotice = null,
     screenedCount = 0,
     totalToScreen = 0,
     screenLogs = [], // [{ paper_id, title, decision, confidence, exclusion_reason }]
@@ -58,6 +61,8 @@ export default function HarvestProgressModal({
   const aiScreenPercent = totalToScreen > 0 
     ? Math.min(100, Math.round((screenedCount / totalToScreen) * 100)) 
     : (isFinished ? 100 : 0);
+
+  const displayModel = activeModel ? activeModel.replace('models/', '') : modelName;
 
   return (
     <div className="fixed inset-0 bg-black/75 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-sans select-none animate-in fade-in duration-200">
@@ -213,13 +218,28 @@ export default function HarvestProgressModal({
           {/* REAL-TIME AI STREAM-SCREENING TELEMETRY (When Auto-Screen is Active) */}
           {autoScreen && (
             <div className="bg-[#151413] border border-[#3730A3]/60 p-3.5 rounded space-y-2.5">
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2 font-bold text-white">
+              <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                <div className="flex items-center gap-2 font-bold text-white flex-wrap">
                   <Bot className="w-4 h-4 text-[#818CF8]" />
-                  <span>Gemini AI Screener Feed</span>
-                  <span className="bg-[#24221F] text-[#A09B8E] text-[10px] px-1.5 py-0.2 rounded border border-[#3D3A35]">
-                    {modelName}
+                  <span>Gemini Screener</span>
+                  
+                  {/* Active Model Pill */}
+                  <span className="bg-[#1E1B4B] text-[#A5B4FC] text-[10px] px-1.5 py-0.2 rounded border border-[#4F46E5]/60 flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5 text-[#818CF8]" />
+                    <span>{displayModel}</span>
                   </span>
+
+                  {/* Cooling Models Circuit Breaker Chips */}
+                  {coolingModels && Object.entries(coolingModels).map(([cModel, rem]) => (
+                    <span 
+                      key={cModel} 
+                      className="bg-[#2D1B0D] text-[#FDE68A] text-[9px] px-1.5 py-0.2 rounded border border-[#B45309] flex items-center gap-1 font-mono animate-in fade-in"
+                      title={`${cModel} hit rate limit. Cooling down for ${rem}s before auto-revival.`}
+                    >
+                      <Clock className="w-2.5 h-2.5 text-[#F59E0B] animate-spin" />
+                      <span>{cModel.replace('models/', '')} ({rem}s)</span>
+                    </span>
+                  ))}
                 </div>
 
                 {/* AI Decision Pill Counters */}
@@ -235,6 +255,17 @@ export default function HarvestProgressModal({
                   </span>
                 </div>
               </div>
+
+              {/* Rate-Limit / Cooldown Adaptive Notice Banner */}
+              {rateLimitNotice && (
+                <div className="bg-[#2D1B0D] border border-[#F59E0B] text-[#FDE68A] p-2 rounded text-[11px] flex items-start gap-2.5 animate-in fade-in">
+                  <Clock className="w-4 h-4 text-[#F59E0B] shrink-0 mt-0.5 animate-spin" />
+                  <div className="space-y-0.5 flex-1">
+                    <span className="font-bold text-white">Circuit Breaker & Cooldown Active:</span>
+                    <p className="text-[10px] text-[#FDE68A] leading-snug">{rateLimitNotice}</p>
+                  </div>
+                </div>
+              )}
 
               {/* AI Warning Box if key is missing or API limit hit */}
               {aiWarning && (
