@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/app/crawlers/__pycache__/
+
+# PyInstaller / Build Cache
+build/
+*.spec
+
+# Keep dist assets / index.html but ignore temporary build artifacts
+dist/*.tmp
+
+# Environment variables & Logs
+.env
+.env.local
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# SQLite temporary journal files (keep rbl_corpus.db as initial seed)
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS Metadata
+.DS_Store
+Thumbs.db

@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #F4F1EA;
+    color: #1A1917;
+  }
+}
+
+/* Custom Scrollbar for Warm Editorial Theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #EAE6DC;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #C8C1AE;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #D94E28;
+}
+
+/* Retro Vintage Button Glow / Borders */
+.btn-editorial {
+  @apply bg-[#D94E28] hover:bg-[#C4411C] text-white font-mono uppercase text-xs tracking-wider py-2 px-4 rounded-none transition-all duration-150 shadow-sm border border-[#A83416];
+}
+
+.btn-editorial-outline {
+  @apply bg-transparent hover:bg-[#EAE6DC] text-[#1A1917] font-mono uppercase text-xs tracking-wider py-1.5 px-3 rounded-none border border-[#C8C1AE] transition-all duration-150;
+}
+
+.card-editorial {
+  @apply bg-[#F8F6F0] border border-[#DCD6C5] shadow-[2px_2px_0px_0px_rgba(26,25,23,0.06)];
+}
