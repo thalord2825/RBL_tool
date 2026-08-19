@@ -186,8 +186,8 @@ export default function App() {
     }
   };
 
-  // Real-Time Streaming Metadata Harvest
-  const handleHarvest = async () => {
+  // Real-Time Streaming Metadata Harvest with Explicit Mode & Live Telemetry
+  const handleHarvest = async (withAiScreen = false) => {
     if (!query.trim()) return;
     setIsHarvesting(true);
     setIsHarvestModalOpen(true);
@@ -199,10 +199,17 @@ export default function App() {
       dedupCount: 0,
       uniqueCount: 0,
       isDone: false,
-      duration: 0
+      duration: 0,
+      stage: 'CRAWL',
+      autoScreen: withAiScreen,
+      modelName: autoScreenModel,
+      screenedCount: 0,
+      totalToScreen: 0,
+      screenLogs: [],
+      aiStats: { INCLUDED: 0, EXCLUDED: 0, UNSURE: 0 }
     });
 
-    addLog('HARVEST', `Starting parallel multi-source crawl across [${sources.join(', ')}]...`);
+    addLog('HARVEST', `Starting parallel multi-source crawl across [${sources.join(', ')}] (AI Screening: ${withAiScreen ? 'ON' : 'OFF'})...`);
 
     try {
       await apiClient.streamHarvestPapers({
@@ -211,13 +218,22 @@ export default function App() {
         sinceYear,
         limitPerSource: 25,
         projectId: 'default',
-        autoScreen: autoScreenOnHarvest,
+        autoScreen: withAiScreen,
         researchContext,
         apiKey: localStorage.getItem('gemini_api_key') || null,
         modelName: autoScreenModel,
         discardExcluded: discardExcludedOnHarvest,
         onEvent: (eventData) => {
-          if (eventData.event === 'source_done') {
+          if (!eventData || !eventData.event) return;
+
+          if (eventData.event === 'stage_change') {
+            setHarvestProgress(prev => ({
+              ...prev,
+              stage: eventData.stage,
+              ...(eventData.raw_count ? { rawCount: eventData.raw_count } : {}),
+              ...(eventData.count ? { totalToScreen: eventData.count } : {})
+            }));
+          } else if (eventData.event === 'source_done') {
             const { source, count, status, error, duration_sec } = eventData;
             setHarvestProgress(prev => ({
               ...prev,
@@ -236,6 +252,13 @@ export default function App() {
           } else if (eventData.event === 'inline_screen_start') {
             addLog('AI_SCREEN', `⚡ Auto-Screening ${eventData.count} harvested papers using ${eventData.model}...`);
           } else if (eventData.event === 'paper_screened') {
+            setHarvestProgress(prev => ({
+              ...prev,
+              screenedCount: eventData.screened_count || (prev.screenedCount + 1),
+              totalToScreen: eventData.total_to_screen || prev.totalToScreen,
+              aiStats: eventData.ai_stats || prev.aiStats,
+              screenLogs: [...(prev.screenLogs || []).slice(-29), eventData]
+            }));
             addLog('AI_SCREEN', `[${eventData.paper_id}] ${eventData.decision} (${Math.round((eventData.confidence || 0.8) * 100)}%) — "${eventData.title}..."`);
           } else if (eventData.event === 'complete') {
             setPapers(eventData.papers || []);
@@ -244,8 +267,10 @@ export default function App() {
               rawCount: eventData.harvested_count,
               dedupCount: eventData.duplicates_filtered,
               uniqueCount: eventData.new_added,
+              aiStats: eventData.ai_stats || prev.aiStats,
               isDone: true,
-              duration: eventData.duration_sec
+              duration: eventData.duration_sec,
+              stage: 'COMPLETE'
             }));
             addLog('SUCCESS', `Harvest complete: +${eventData.new_added} unique papers added, ${eventData.duplicates_filtered} duplicates filtered (${eventData.duration_sec}s).`);
           }

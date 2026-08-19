@@ -8,7 +8,7 @@ import {
   ChevronDown, 
   ChevronUp, 
   Bot, 
-  Sliders, 
+  Download,
   Info,
   CheckCircle2
 } from 'lucide-react';
@@ -22,8 +22,6 @@ export default function SearchQueryBar({
   setSinceYear,
   researchContext,
   setResearchContext,
-  autoScreenOnHarvest,
-  setAutoScreenOnHarvest,
   autoScreenModel,
   setAutoScreenModel,
   discardExcludedOnHarvest,
@@ -64,10 +62,10 @@ export default function SearchQueryBar({
     <div className="bg-[#EFECE4] border-b border-[#DCD6C5] px-4 py-2 select-none shrink-0 space-y-2 font-mono text-xs">
       
       {/* Primary Toolbar Row */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-2.5 flex-wrap">
         
         {/* Search Query Input */}
-        <div className="relative flex-1 min-w-[280px]">
+        <div className="relative flex-1 min-w-[260px]">
           <Search className="w-3.5 h-3.5 absolute left-3 top-2 text-[#7A766F]" />
           <input
             type="text"
@@ -117,43 +115,62 @@ export default function SearchQueryBar({
           type="button"
           onClick={() => setShowContextDrawer(!showContextDrawer)}
           className={`px-2.5 py-1 text-[11px] font-bold border rounded-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-            showContextDrawer || (researchContext && researchContext.trim()) || autoScreenOnHarvest
+            showContextDrawer || (researchContext && researchContext.trim())
               ? 'bg-[#24221F] text-[#FDE68A] border-[#1A1917] shadow-2xs'
               : 'bg-[#F8F6F0] text-[#55524B] border-[#C8C1AE] hover:bg-[#EDE9DF]'
           }`}
-          title="Toggle AI Context Guidance, PICO relaxation notes, and Inline Real-Time Screening"
+          title="Customize AI Context Guidance and PICO relaxation notes"
         >
           <BrainCircuit className="w-3.5 h-3.5 text-[#EAB308]" />
-          <span>AI Guidance {autoScreenOnHarvest ? '⚡' : ''}</span>
-          {showContextDrawer ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          <span>AI Guidance</span>
+          {showContextDrawer ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3 text-[#A09B8E]" />}
         </button>
 
-        {/* Harvest Metadata & Screen Button */}
-        <button
-          onClick={onHarvest}
-          disabled={isHarvesting || !query.trim()}
-          className={`px-4 py-1 flex items-center gap-1.5 text-xs uppercase tracking-wider font-bold shadow-2xs disabled:opacity-50 shrink-0 transition-all border cursor-pointer rounded-xs ${
-            autoScreenOnHarvest
-              ? 'bg-[#4F46E5] hover:bg-[#4338CA] text-white border-[#3730A3]'
-              : 'bg-[#D94E28] hover:bg-[#C4411C] text-white border-[#A83416]'
-          }`}
-        >
-          {isHarvesting ? (
-            <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              <span>{autoScreenOnHarvest ? 'Harvesting & Screening...' : 'Harvesting...'}</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{autoScreenOnHarvest ? 'Harvest & Screen ⚡' : 'Harvest Metadata'}</span>
-            </>
-          )}
-        </button>
+        {/* DUAL HARVEST BUTTONS: Standard vs AI Screen */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          
+          {/* Button 1: Standard Crawl */}
+          <button
+            type="button"
+            onClick={() => onHarvest(false)}
+            disabled={isHarvesting || !query.trim()}
+            className="bg-[#24221F] hover:bg-[#33312E] text-[#F4F1EA] px-3 py-1 flex items-center gap-1.5 text-xs font-bold shadow-2xs disabled:opacity-50 transition-all border border-[#1A1917] cursor-pointer rounded-xs"
+            title="Fast multi-source metadata harvest without AI screening (saved as PENDING)"
+          >
+            {isHarvesting ? (
+              <Loader2 className="w-3 h-3 animate-spin text-[#A09B8E]" />
+            ) : (
+              <Download className="w-3 h-3 text-[#A09B8E]" />
+            )}
+            <span>Standard Crawl</span>
+          </button>
+
+          {/* Button 2: Crawl + AI Screen */}
+          <button
+            type="button"
+            onClick={() => onHarvest(true)}
+            disabled={isHarvesting || !query.trim()}
+            className="bg-[#4F46E5] hover:bg-[#4338CA] text-white px-3.5 py-1 flex items-center gap-1.5 text-xs uppercase tracking-wider font-bold shadow-2xs disabled:opacity-50 transition-all border border-[#3730A3] cursor-pointer rounded-xs"
+            title="Crawl and immediately evaluate papers with Gemini AI using PICO + IC/EC + Context"
+          >
+            {isHarvesting ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>Screening...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Crawl + AI Screen ⚡</span>
+              </>
+            )}
+          </button>
+
+        </div>
 
       </div>
 
-      {/* Expandable AI Context Guidance & Inline Screening Drawer */}
+      {/* Expandable AI Context Guidance & Screening Configuration Drawer */}
       {showContextDrawer && (
         <div className="bg-[#F8F6F0] border border-[#DCD6C5] p-3 rounded space-y-3 animate-in fade-in duration-150">
           
@@ -161,48 +178,34 @@ export default function SearchQueryBar({
             <div className="flex items-center gap-2">
               <BrainCircuit className="w-4 h-4 text-[#D94E28]" />
               <span className="font-bold text-xs text-[#1A1917]">
-                AI Domain Guidance & Context Relaxation (Custom Screener Prompts)
+                AI Domain Guidance & Context Relaxation (Custom Screener Directives)
               </span>
             </div>
 
-            {/* Inline Screening Toggle Switch */}
+            {/* Model & Discard Controls */}
             <div className="flex items-center gap-3 font-mono text-[11px]">
-              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <div className="flex items-center gap-1.5">
+                <Bot className="w-3.5 h-3.5 text-[#4F46E5]" />
+                <span className="text-[10px] text-[#7A766F] font-bold">Model:</span>
+                <select
+                  value={autoScreenModel}
+                  onChange={(e) => setAutoScreenModel(e.target.value)}
+                  className="bg-white border border-[#C8C1AE] px-2 py-0.5 text-[10px] text-[#1A1917] rounded focus:outline-none"
+                >
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
+                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep)</option>
+                </select>
+              </div>
+
+              <label className="flex items-center gap-1 text-[10px] text-[#55524B] cursor-pointer" title="Uncheck to completely discard rejected papers from SQLite">
                 <input
                   type="checkbox"
-                  checked={autoScreenOnHarvest}
-                  onChange={(e) => setAutoScreenOnHarvest(e.target.checked)}
-                  className="accent-[#4F46E5] w-3.5 h-3.5 cursor-pointer"
+                  checked={!discardExcludedOnHarvest}
+                  onChange={(e) => setDiscardExcludedOnHarvest(!e.target.checked)}
+                  className="accent-[#D94E28] w-3 h-3 cursor-pointer"
                 />
-                <span className="font-bold text-[#1A1917] flex items-center gap-1">
-                  <Bot className="w-3 h-3 text-[#4F46E5]" />
-                  <span>Auto-Screen with Gemini during Harvest</span>
-                </span>
+                <span>Save EXCLUDED (for PRISMA flow)</span>
               </label>
-
-              {autoScreenOnHarvest && (
-                <div className="flex items-center gap-2 pl-2 border-l border-[#C8C1AE]">
-                  <span className="text-[10px] text-[#7A766F]">Model:</span>
-                  <select
-                    value={autoScreenModel}
-                    onChange={(e) => setAutoScreenModel(e.target.value)}
-                    className="bg-white border border-[#C8C1AE] px-1.5 py-0.5 text-[10px] text-[#1A1917] rounded focus:outline-none"
-                  >
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep)</option>
-                  </select>
-
-                  <label className="flex items-center gap-1 text-[10px] text-[#55524B] cursor-pointer" title="Uncheck to completely discard rejected papers from SQLite">
-                    <input
-                      type="checkbox"
-                      checked={!discardExcludedOnHarvest}
-                      onChange={(e) => setDiscardExcludedOnHarvest(!e.target.checked)}
-                      className="accent-[#D94E28] w-3 h-3 cursor-pointer"
-                    />
-                    <span>Save EXCLUDED (PRISMA)</span>
-                  </label>
-                </div>
-              )}
             </div>
           </div>
 

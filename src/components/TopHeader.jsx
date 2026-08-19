@@ -35,44 +35,6 @@ export default function TopHeader({
         </span>
       </div>
 
-      {/* Center: Sleek Compact Inline PRISMA Flow Capsule */}
-      <div className="hidden md:flex items-center gap-2.5 bg-[#24221F] border border-[#3D3A35] px-3 py-1 text-[11px] font-mono shadow-inner rounded">
-        <div className="font-bold text-white flex items-center gap-1" title="Total records in corpus">
-          <span className="bg-[#3D3A35] text-[#F4F1EA] px-2 py-0.5 rounded text-xs">{totalCount}</span>
-        </div>
-
-        <ArrowRight className="w-3 h-3 text-[#7A766F] shrink-0" />
-
-        <div className="flex items-center gap-2">
-          <span className="text-[#4ADE80] font-bold" title="Papers meeting inclusion criteria">
-            ✓ {includedCount} Inc
-          </span>
-          <span className="text-[#55524C]">•</span>
-          <span className="text-[#F87171] font-bold" title="Papers excluded">
-            ✕ {excludedCount} Exc
-          </span>
-          <span className="text-[#55524C]">•</span>
-          <span className="text-[#FBBF24] font-bold" title="Papers awaiting review">
-            ⏳ {pendingCount} Pend
-          </span>
-        </div>
-
-        <ArrowRight className="w-3 h-3 text-[#7A766F] shrink-0" />
-
-        <div className="flex items-center gap-1 text-[#38BDF8] font-bold" title="Fully extracted into 7-column evidence matrix">
-          <span>{extractedCount} Extracted</span>
-        </div>
-
-        {duplicatesCount > 0 && (
-          <>
-            <span className="text-[#55524C]">•</span>
-            <div className="flex items-center gap-1 text-[#ECC94B] font-bold" title="Potential duplicate papers flagged">
-              <AlertTriangle className="w-3 h-3" />
-              <span>{duplicatesCount} Dup</span>
-            </div>
-          </>
-        )}
-      </div>
 
       {/* Right: Action Controls */}
       <div className="flex items-center gap-2 shrink-0">

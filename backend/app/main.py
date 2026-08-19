@@ -146,7 +146,8 @@ def stream_search_and_harvest(req: SearchRequest):
     """
     def event_stream():
         start_time = time.time()
-        yield f"data: {json.dumps({'event': 'init', 'query': req.query, 'sources': req.sources, 'since_year': req.since_year})}\n\n"
+        yield f"data: {json.dumps({'event': 'init', 'query': req.query, 'sources': req.sources, 'since_year': req.since_year, 'auto_screen': req.auto_screen})}\n\n"
+        yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'CRAWL', 'sources': req.sources})}\n\n"
 
         crawlers_to_run = [(s, CRAWLER_MAP[s]) for s in req.sources if s in CRAWLER_MAP]
         raw_harvested = []
@@ -187,10 +188,13 @@ def stream_search_and_harvest(req: SearchRequest):
                     yield f"data: {json.dumps({'event': 'source_done', 'source': src_name, 'count': 0, 'status': 'error', 'error': str(ex)})}\n\n"
 
         # Deduplication phase
+        yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'DEDUP', 'raw_count': len(raw_harvested)})}\n\n"
         yield f"data: {json.dumps({'event': 'dedup_start', 'raw_count': len(raw_harvested)})}\n\n"
         existing_papers = Database.get_all_papers(req.project_id)
         unique_new, duplicates_count = DeduplicationEngine.deduplicate(existing_papers, raw_harvested)
         
+        ai_stats = {"INCLUDED": 0, "EXCLUDED": 0, "UNSURE": 0}
+
         # Optional Inline Real-Time AI Screening during Crawl
         if unique_new and req.auto_screen:
             protocol = Database.get_protocol(req.project_id) or {}
@@ -203,6 +207,7 @@ def stream_search_and_harvest(req: SearchRequest):
             ic_list = protocol.get("ic_list") or []
             ec_list = protocol.get("ec_list") or []
 
+            yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'AI_SCREEN', 'count': len(unique_new), 'model': req.model_name})}\n\n"
             yield f"data: {json.dumps({'event': 'inline_screen_start', 'count': len(unique_new), 'model': req.model_name})}\n\n"
             
             evaluations = GeminiScreener.screen_papers_batch(
@@ -217,6 +222,7 @@ def stream_search_and_harvest(req: SearchRequest):
 
             eval_map = {e["id"]: e for e in evaluations if "id" in e}
             screened_unique = []
+            screened_counter = 0
 
             for p in unique_new:
                 e_info = eval_map.get(p["id"])
@@ -232,7 +238,11 @@ def stream_search_and_harvest(req: SearchRequest):
                     p["ai_rationale"] = rationale
                     p["exclusion_reason"] = exc_reason
 
-                    yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': p['id'], 'title': p.get('title', '')[:60], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason})}\n\n"
+                    if decision in ai_stats:
+                        ai_stats[decision] += 1
+                    screened_counter += 1
+
+                    yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': p['id'], 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats})}\n\n"
                 
                 # Check discard_excluded setting
                 if req.discard_excluded and p.get("status") == "EXCLUDED":
@@ -248,7 +258,8 @@ def stream_search_and_harvest(req: SearchRequest):
         flagged_corpus = DeduplicationEngine.flag_corpus_duplicates(all_current)
 
         total_dur = round(time.time() - start_time, 2)
-        yield f"data: {json.dumps({'event': 'complete', 'harvested_count': len(raw_harvested), 'duplicates_filtered': duplicates_count, 'new_added': len(unique_new), 'total_corpus': len(flagged_corpus), 'duration_sec': total_dur, 'papers': flagged_corpus})}\n\n"
+        yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'COMPLETE'})}\n\n"
+        yield f"data: {json.dumps({'event': 'complete', 'harvested_count': len(raw_harvested), 'duplicates_filtered': duplicates_count, 'new_added': len(unique_new), 'total_corpus': len(flagged_corpus), 'duration_sec': total_dur, 'papers': flagged_corpus, 'ai_stats': ai_stats})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
