@@ -256,46 +256,67 @@ class Database:
             return dict(cursor.fetchone())
 
     @classmethod
-    def delete_paper(cls, paper_id: str) -> bool:
-        with cls.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM papers WHERE id = ?", (paper_id,))
-            conn.commit()
-            return cursor.rowcount > 0
+    def delete_paper(cls, paper_id: str, project_id: str = "default") -> bool:
+        for attempt in range(5):
+            try:
+                with cls.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM papers WHERE id = ? AND project_id = ?", (paper_id, project_id))
+                    conn.commit()
+                    return cursor.rowcount > 0
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     @classmethod
     def bulk_update_papers(cls, paper_ids: List[str], updates: Dict[str, Any], project_id: str = "default") -> int:
         if not paper_ids or not updates:
             return 0
-        with cls.get_connection() as conn:
-            cursor = conn.cursor()
-            set_clauses = []
-            values = []
-            for key, val in updates.items():
-                if key != "id":
-                    set_clauses.append(f"{key} = ?")
-                    if key == "duplicate_flag":
-                        values.append(1 if val else 0)
-                    else:
-                        values.append(val)
-            if not set_clauses:
-                return 0
-            placeholders = ",".join(["?"] * len(paper_ids))
-            query = f"UPDATE papers SET {', '.join(set_clauses)} WHERE project_id = ? AND id IN ({placeholders})"
-            cursor.execute(query, (*values, project_id, *paper_ids))
-            conn.commit()
-            return cursor.rowcount
+        for attempt in range(5):
+            try:
+                with cls.get_connection() as conn:
+                    cursor = conn.cursor()
+                    set_clauses = []
+                    values = []
+                    for key, val in updates.items():
+                        if key != "id":
+                            set_clauses.append(f"{key} = ?")
+                            if key == "duplicate_flag":
+                                values.append(1 if val else 0)
+                            else:
+                                values.append(val)
+                    if not set_clauses:
+                        return 0
+                    placeholders = ",".join(["?"] * len(paper_ids))
+                    query = f"UPDATE papers SET {', '.join(set_clauses)} WHERE project_id = ? AND id IN ({placeholders})"
+                    cursor.execute(query, (*values, project_id, *paper_ids))
+                    conn.commit()
+                    return cursor.rowcount
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     @classmethod
     def bulk_delete_papers(cls, paper_ids: List[str], project_id: str = "default") -> int:
         if not paper_ids:
             return 0
-        with cls.get_connection() as conn:
-            cursor = conn.cursor()
-            placeholders = ",".join(["?"] * len(paper_ids))
-            cursor.execute(f"DELETE FROM papers WHERE project_id = ? AND id IN ({placeholders})", (project_id, *paper_ids))
-            conn.commit()
-            return cursor.rowcount
+        for attempt in range(5):
+            try:
+                with cls.get_connection() as conn:
+                    cursor = conn.cursor()
+                    placeholders = ",".join(["?"] * len(paper_ids))
+                    cursor.execute(f"DELETE FROM papers WHERE project_id = ? AND id IN ({placeholders})", (project_id, *paper_ids))
+                    conn.commit()
+                    return cursor.rowcount
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     @classmethod
     def clear_papers(cls, project_id: str = "default") -> int:

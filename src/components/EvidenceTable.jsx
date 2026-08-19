@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import AiRationaleModal from './AiRationaleModal';
 import SmartSelectionModal from './SmartSelectionModal';
+import DeleteConfirmModal from './DeleteConfirmModal';
 import { getBuiltInPresets, filterPapersByRule } from '../services/ruleEvaluator';
 import apiClient from '../services/apiClient';
 
@@ -72,6 +73,10 @@ export default function EvidenceTable({
 
   // Pin Selected Papers to Top State
   const [pinSelected, setPinSelected] = useState(true);
+
+  // Delete Modal State
+  const [deletingPaper, setDeletingPaper] = useState(null);
+  const [isBulkDeleteOpen, setIsBulkDeleteOpen] = useState(false);
 
   // Smart Selection & Rule Engine State
   const [isSmartSelectOpen, setIsSmartSelectOpen] = useState(false);
@@ -515,17 +520,30 @@ export default function EvidenceTable({
     setActiveRuleLabel(null);
   };
 
-  const handleBulkDelete = async () => {
+  const handleSingleDeleteClick = (paper) => {
+    setDeletingPaper(paper);
+  };
+
+  const handleSingleDeleteConfirm = async (paperId) => {
+    if (onDeletePaper) {
+      await onDeletePaper(paperId);
+    }
+    setDeletingPaper(null);
+  };
+
+  const handleBulkDelete = () => {
     const ids = Array.from(selectedPaperIds);
     if (ids.length === 0) return;
+    setIsBulkDeleteOpen(true);
+  };
 
-    if (window.confirm(`Permanently delete ${ids.length} selected paper records from SQLite corpus?`)) {
-      if (onBulkDeletePapers) {
-        await onBulkDeletePapers(ids);
-      }
-      setSelectedPaperIds(new Set());
-      setActiveRuleLabel(null);
+  const handleBulkDeleteConfirm = async (ids) => {
+    if (onBulkDeletePapers) {
+      await onBulkDeletePapers(ids);
     }
+    setSelectedPaperIds(new Set());
+    setActiveRuleLabel(null);
+    setIsBulkDeleteOpen(false);
   };
 
   const handleBulkScreen = () => {
@@ -1263,8 +1281,8 @@ export default function EvidenceTable({
                       {/* Col 6: Actions */}
                       <td className="py-3 px-3 text-right">
                         <button
-                          onClick={() => onDeletePaper(paper.id)}
-                          className="p-1 hover:bg-[#FADBD8] text-[#7A766F] hover:text-[#C93B2B] transition-colors border border-transparent hover:border-[#F5B7B1] rounded"
+                          onClick={() => handleSingleDeleteClick(paper)}
+                          className="p-1 hover:bg-[#FADBD8] text-[#7A766F] hover:text-[#C93B2B] transition-colors border border-transparent hover:border-[#F5B7B1] rounded cursor-pointer"
                           title="Delete paper record"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -1619,6 +1637,22 @@ export default function EvidenceTable({
           </div>
         </div>
       )}
+
+      {/* Modern Danger Confirmation Modal for Single Paper Deletion */}
+      <DeleteConfirmModal
+        isOpen={!!deletingPaper}
+        onClose={() => setDeletingPaper(null)}
+        onConfirm={handleSingleDeleteConfirm}
+        paper={deletingPaper}
+      />
+
+      {/* Modern Danger Confirmation Modal for Bulk Paper Deletion */}
+      <DeleteConfirmModal
+        isOpen={isBulkDeleteOpen}
+        onClose={() => setIsBulkDeleteOpen(false)}
+        onConfirm={handleBulkDeleteConfirm}
+        paperIds={Array.from(selectedPaperIds)}
+      />
 
     </div>
   );
