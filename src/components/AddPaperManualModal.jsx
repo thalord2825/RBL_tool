@@ -81,7 +81,11 @@ export default function AddPaperManualModal({
         if (data.source) setSource(data.source);
         if (data.citations_count) setCitationsCount(data.citations_count);
 
-        setFetchSuccess(`Successfully resolved metadata from ${data.source || 'Canonical Registry'}!`);
+        if (!data.title || data.title === 'Untitled') {
+          setFetchError('Metadata was partially retrieved. Please review and enter Title or Abstract below.');
+        } else {
+          setFetchSuccess(`Successfully resolved: "${data.title.slice(0, 55)}..." from ${data.source || 'Canonical Registry'}`);
+        }
       } else {
         setFetchError('No metadata could be parsed. You can still fill in the details manually.');
       }
