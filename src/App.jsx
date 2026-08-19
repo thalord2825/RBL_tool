@@ -14,6 +14,7 @@ import ExportModal from './components/ExportModal';
 import ProtocolSettingsModal, { DEFAULT_PICO, DEFAULT_IC_LIST, DEFAULT_EC_LIST } from './components/ProtocolSettingsModal';
 import AiScreenMiniDock from './components/AiScreenMiniDock';
 import CsvImportModal from './components/CsvImportModal';
+import AddPaperManualModal from './components/AddPaperManualModal';
 
 import { apiClient, getStoredGeminiApiKey } from './services/apiClient';
 
@@ -46,6 +47,7 @@ export default function App() {
   const [isGitSettingsOpen, setIsGitSettingsOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isCsvImportModalOpen, setIsCsvImportModalOpen] = useState(false);
+  const [isAddPaperModalOpen, setIsAddPaperModalOpen] = useState(false);
 
   // Real-Time Streaming Progress
   const [harvestProgress, setHarvestProgress] = useState(null);
@@ -660,6 +662,7 @@ export default function App() {
         onOpenAiProgressModal={() => setIsAiProgressModalOpen(true)}
         onOpenProtocolModal={() => setIsProtocolModalOpen(true)}
         onOpenCsvImport={() => setIsCsvImportModalOpen(true)}
+        onOpenAddPaper={() => setIsAddPaperModalOpen(true)}
         onOpenGitSettings={() => setIsGitSettingsOpen(true)}
         onOpenExportModal={() => setIsExportModalOpen(true)}
         onRefreshCorpus={fetchPapers}
@@ -773,6 +776,24 @@ export default function App() {
             fetchPapers();
           }
           addLog('SUCCESS', `CSV Ingestion: +${res.new_added || 0} unique papers added (${res.duplicates_filtered || 0} duplicates filtered).`);
+        }}
+      />
+
+      {/* Manual / DOI Paper Entry Modal */}
+      <AddPaperManualModal
+        isOpen={isAddPaperModalOpen}
+        onClose={() => setIsAddPaperModalOpen(false)}
+        onPaperAdded={(savedPaper, updatedPapersList, isDuplicate) => {
+          if (Array.isArray(updatedPapersList)) {
+            setPapers(updatedPapersList);
+          } else if (savedPaper) {
+            setPapers(prev => [savedPaper, ...(prev || [])]);
+          }
+          if (isDuplicate) {
+            addLog('WARN', `Added paper [${savedPaper?.id || 'P'}] "${savedPaper?.title?.slice(0, 45)}..." (Flagged as potential duplicate).`);
+          } else {
+            addLog('SUCCESS', `Added paper [${savedPaper?.id || 'P'}] "${savedPaper?.title?.slice(0, 45)}..." to corpus.`);
+          }
         }}
       />
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, GitCommit, RefreshCw, Sparkles, Sliders, Activity, FileSpreadsheet } from 'lucide-react';
+import { Download, GitCommit, RefreshCw, Sparkles, Sliders, Activity, FileSpreadsheet, PlusCircle } from 'lucide-react';
 
 export default function TopHeader({ 
   totalCount,
@@ -19,6 +19,7 @@ export default function TopHeader({
   onOpenAiProgressModal,
   onOpenProtocolModal,
   onOpenCsvImport,
+  onOpenAddPaper,
   onOpenGitSettings, 
   onOpenExportModal,
   onRefreshCorpus,
@@ -90,6 +91,16 @@ export default function TopHeader({
         >
           <FileSpreadsheet className="w-3.5 h-3.5 text-[#38BDF8]" />
           <span>Import CSV</span>
+        </button>
+
+        {/* Add Paper Manually / via DOI Button */}
+        <button
+          onClick={onOpenAddPaper}
+          className="bg-[#24221F] hover:bg-[#33312E] text-[#4ADE80] hover:text-white border border-[#4A4843] hover:border-[#4ADE80] font-mono text-[11px] py-1.5 px-2.5 flex items-center gap-1.5 transition-colors font-bold shadow-2xs cursor-pointer"
+          title="Add a paper manually or auto-fetch metadata via DOI / ArXiv / URL"
+        >
+          <PlusCircle className="w-3.5 h-3.5 text-[#4ADE80]" />
+          <span>+ Add Paper</span>
         </button>
 
         {/* AI Auto-Screen Button */}

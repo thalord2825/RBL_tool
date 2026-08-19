@@ -354,6 +354,22 @@ export const apiClient = {
     });
     return res.data;
   },
+
+  // Manual Paper Add & Universal Metadata Resolver
+  fetchMetadata: async (identifier) => {
+    const res = await api.post('/papers/fetch-metadata', {
+      identifier,
+    });
+    return res.data;
+  },
+
+  addManualPaper: async (paper, projectId = 'default') => {
+    const res = await api.post('/papers/manual', {
+      paper,
+      project_id: projectId,
+    });
+    return res.data;
+  },
 };
 
 export default apiClient;

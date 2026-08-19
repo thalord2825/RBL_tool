@@ -34,6 +34,7 @@ from .engine.gemini_screener import GeminiScreener
 from .engine.rbl_exporter import RblExporter
 from .engine.github_atomic import GitHubAtomicCommitter
 from .engine.abstract_resolver import AbstractResolver
+from .engine.metadata_fetcher import MetadataFetcher
 
 # Setup structured logging
 logging.basicConfig(
@@ -658,6 +659,70 @@ def update_manual_abstract(paper_id: str, req: UpdateAbstractRequest):
         "paper_id": paper_id,
         "abstract": req.abstract,
         "paper": updated
+    }
+
+class FetchMetadataRequest(BaseModel):
+    identifier: str
+
+@app.post("/api/papers/fetch-metadata")
+def fetch_paper_metadata(req: FetchMetadataRequest):
+    """
+    Auto-fetches canonical academic metadata for DOI, ArXiv link/ID, or generic publisher URL.
+    """
+    if not req.identifier or not req.identifier.strip():
+        raise HTTPException(status_code=400, detail="DOI or paper URL identifier is required.")
+    try:
+        data = MetadataFetcher.resolve_identifier(req.identifier.strip())
+        return data
+    except Exception as e:
+        logger.error(f"Error resolving metadata for '{req.identifier}': {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AddManualPaperRequest(BaseModel):
+    project_id: str = "default"
+    paper: Dict[str, Any]
+
+@app.post("/api/papers/manual")
+def add_manual_paper(req: AddManualPaperRequest):
+    """
+    Adds a paper manually to the SQLite database with duplicate detection.
+    """
+    p = req.paper
+    if not p.get("title") or not str(p.get("title")).strip():
+        raise HTTPException(status_code=400, detail="Paper title is required.")
+
+    existing_papers = Database.get_all_papers(req.project_id) or []
+
+    # Assign sequential deterministic ID if not provided
+    if not p.get("id"):
+        p["id"] = f"P{len(existing_papers) + 1:03d}"
+
+    # Default fallback values
+    p.setdefault("status", "PENDING")
+    p.setdefault("source", "Manual Entry")
+    p.setdefault("year", 2024)
+    p.setdefault("authors", "Unknown Authors")
+    p.setdefault("venue", "")
+    p.setdefault("abstract", "N/A")
+    p.setdefault("citations_count", 0)
+
+    # Check for potential duplicates
+    unique_new, dup_count = DeduplicationEngine.deduplicate(existing_papers, [p])
+    is_duplicate = (dup_count > 0)
+
+    # Save to SQLite
+    Database.save_papers([p], project_id=req.project_id)
+
+    # Fetch updated corpus with duplicates flagged
+    updated_corpus = Database.get_all_papers(req.project_id)
+    flagged = DeduplicationEngine.flag_corpus_duplicates(updated_corpus)
+
+    return {
+        "status": "success",
+        "paper": p,
+        "is_duplicate": is_duplicate,
+        "total_count": len(flagged),
+        "papers": flagged
     }
 
 
