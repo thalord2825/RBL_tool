@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import time
+import random
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Generator
@@ -9,15 +10,16 @@ from ..database import Database
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FALLBACKS = [
+VALID_DEFAULT_MODELS = [
+    "models/gemini-2.0-flash",
+    "models/gemini-1.5-flash",
     "models/gemini-2.5-flash",
-    "models/gemini-flash-latest",
-    "models/gemini-2.5-flash-lite",
-    "models/gemini-2.5-pro",
-    "models/gemini-3-flash",
+    "models/gemini-1.5-flash-8b",
+    "models/gemini-1.5-pro",
+    "models/gemini-2.0-flash-lite",
 ]
 
-MICRO_CHUNK_SIZE = 6  # 6 papers per micro-chunk for ultra-fast parallel throughput
+MICRO_CHUNK_SIZE = 8  # 8 papers per chunk for fast, high-quality batch evaluation
 
 class GeminiScreener:
     _cached_models: Optional[List[str]] = None
@@ -26,14 +28,14 @@ class GeminiScreener:
     @classmethod
     def get_available_models(cls, api_key: str) -> List[str]:
         """
-        Queries Google Gemini ModelService with caching to prevent redundant HTTP requests.
+        Queries Google Gemini ModelService with caching to return valid models.
         """
         if cls._cached_models and cls._cached_key == api_key:
             return cls._cached_models
 
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=50"
-            res = requests.get(url, timeout=5)
+            res = requests.get(url, timeout=6)
             if res.status_code == 200:
                 data = res.json()
                 models = [
@@ -45,18 +47,29 @@ class GeminiScreener:
                     cls._cached_key = api_key
                     return models
         except Exception as e:
-            logger.warning(f"Error querying ListModels (will use default candidates): {e}")
+            logger.warning(f"Error querying ListModels (will use valid fallback candidates): {e}")
 
-        return DEFAULT_FALLBACKS
+        return VALID_DEFAULT_MODELS
 
     @classmethod
     def _build_candidate_models(cls, api_key: str, model_name: Optional[str] = None) -> List[str]:
         candidates = []
+        
+        # User selected model
         if model_name and model_name != "auto":
             clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
+            # Strip invalid gemini-3 references if present in older localStorage
+            if "gemini-3" in clean_m:
+                clean_m = "models/gemini-2.0-flash"
             candidates.append(clean_m)
 
-        for fb in DEFAULT_FALLBACKS:
+        # Dynamic query
+        available = cls.get_available_models(api_key)
+        for m in available:
+            if m not in candidates and any(k in m for k in ["flash", "pro"]):
+                candidates.append(m)
+
+        for fb in VALID_DEFAULT_MODELS:
             if fb not in candidates:
                 candidates.append(fb)
 
@@ -75,7 +88,7 @@ class GeminiScreener:
         research_context: Optional[str] = ""
     ) -> List[Dict[str, Any]]:
         """
-        Evaluates a single micro-chunk (<= 6 papers) with fast timeout (15s).
+        Evaluates a single micro-chunk (<= 8 papers) with adaptive retry on 429 and fast 404 bypass.
         """
         papers_payload = []
         for p in chunk_papers:
@@ -159,9 +172,9 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
             for api_ver in ["v1beta", "v1"]:
                 url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
                 
-                for attempt in range(3):
+                for attempt in range(4):
                     try:
-                        response = requests.post(url, headers=headers, json=payload, timeout=20)
+                        response = requests.post(url, headers=headers, json=payload, timeout=22)
                         if response.status_code == 200:
                             result_json = response.json()
                             candidates = result_json.get("candidates", [])
@@ -190,21 +203,25 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                                 if pid in eval_map:
                                     final_evals.append(eval_map[pid])
                                 else:
-                                    # Fallback item if Gemini skipped this ID
                                     final_evals.append({
                                         "id": pid,
                                         "decision": "PENDING",
                                         "confidence_score": 0.5,
                                         "matched_criteria": [],
                                         "exclusion_reason": None,
-                                        "scientific_rationale": "Pending manual / deep batch review"
+                                        "scientific_rationale": "Pending manual review"
                                     })
                             return final_evals
 
                         elif response.status_code in [429, 503]:
-                            logger.warning(f"Gemini API rate limited (attempt {attempt+1}/3), backing off...")
-                            time.sleep(1.2 * (attempt + 1))
+                            backoff = 3.0 * (attempt + 1) + random.uniform(0.2, 0.8)
+                            logger.warning(f"Gemini API rate limit 429 on {model_id} (attempt {attempt+1}/4). Backing off {backoff:.1f}s...")
+                            time.sleep(backoff)
                             continue
+                        elif response.status_code == 404:
+                            # Non-existent model on this endpoint, skip to next candidate immediately
+                            last_error = f"HTTP 404: Model {model_id} not available"
+                            break
                         else:
                             last_error = f"HTTP {response.status_code}: {response.text[:200]}"
                             break
@@ -267,7 +284,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
             futures = []
             for idx, ch in enumerate(chunks):
                 futures.append(executor.submit(process_chunk, idx, ch))
-                time.sleep(0.2)  # Pacing between submissions to prevent burst rate-limits
+                time.sleep(0.3)  # Pacing between submissions to prevent burst rate-limits
 
             for future in as_completed(futures):
                 try:
@@ -317,7 +334,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
 
         total_papers = len(papers)
         candidates_to_try = cls._build_candidate_models(gemini_key, model_name)
-        active_model = candidates_to_try[0] if candidates_to_try else "models/gemini-2.5-flash"
+        active_model = candidates_to_try[0] if candidates_to_try else "models/gemini-2.0-flash"
 
         chunks = [papers[i:i + MICRO_CHUNK_SIZE] for i in range(0, total_papers, MICRO_CHUNK_SIZE)]
         total_chunks = len(chunks)
@@ -385,7 +402,9 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                 logger.error(f"Chunk {chunk_idx} failed: {e}")
                 yield f"data: {json.dumps({'event': 'chunk_error', 'chunk_idx': chunk_idx, 'error': str(e)})}\n\n"
 
+            time.sleep(0.4)  # Smooth rate-limit pacing between sequential chunks
             yield f": heartbeat\n\n"
 
         final_papers = Database.get_all_papers(project_id)
-        yield f"data: {json.dumps({'event': 'complete', 'total_papers': total_papers, 'evaluated_count': evaluated_count, 'stats': stats, 'total_duration_sec': round(time.time() - start_time, 2), 'papers': final_papers})}\n\n"
+        total_dur = round(time.time() - start_time, 2)
+        yield f"data: {json.dumps({'event': 'complete', 'total': total_papers, 'evaluated': evaluated_count, 'stats': stats, 'duration_seconds': total_dur, 'papers': final_papers})}\n\n"

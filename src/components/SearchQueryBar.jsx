@@ -251,8 +251,10 @@ export default function SearchQueryBar({
                   onChange={(e) => setAutoScreenModel(e.target.value)}
                   className="bg-white border border-[#C8C1AE] px-2 py-0.5 text-[10px] text-[#1A1917] rounded focus:outline-none"
                 >
-                  <option value="gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
-                  <option value="gemini-2.5-pro">Gemini 2.5 Pro (Deep)</option>
+                  <option value="gemini-2.0-flash">Gemini 2.0 Flash (Recommended)</option>
+                  <option value="gemini-1.5-flash">Gemini 1.5 Flash (Ultra Stable)</option>
+                  <option value="gemini-1.5-pro">Gemini 1.5 Pro (Deep)</option>
+                  <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                 </select>
               </div>
 

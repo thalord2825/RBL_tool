@@ -29,7 +29,7 @@ export default function App() {
     'Prioritize Vietnamese SMS/Zalo/Messenger phishing and scam datasets. If scarce, accept Southeast Asian and international mobile phishing studies with transferable NLP/LLM classification architectures (relax strict Vietnam-only constraint).'
   );
   const [autoScreenOnHarvest, setAutoScreenOnHarvest] = useState(false);
-  const [autoScreenModel, setAutoScreenModel] = useState('gemini-2.5-flash');
+  const [autoScreenModel, setAutoScreenModel] = useState('gemini-2.0-flash');
   const [discardExcludedOnHarvest, setDiscardExcludedOnHarvest] = useState(false);
   
   // UI & Loading State

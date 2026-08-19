@@ -191,11 +191,11 @@ export default function AiScreenModal({
                 className="w-full bg-[#F8F6F0] border border-[#C8C1AE] p-2 text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28] cursor-pointer font-mono rounded-xs"
               >
                 <option value="auto">Auto-Discover (Best)</option>
+                <option value="models/gemini-2.0-flash">Gemini 2.0 Flash (Recommended)</option>
+                <option value="models/gemini-1.5-flash">Gemini 1.5 Flash (Ultra Stable)</option>
+                <option value="models/gemini-1.5-pro">Gemini 1.5 Pro (Deep Analysis)</option>
                 <option value="models/gemini-2.5-flash">Gemini 2.5 Flash</option>
-                <option value="models/gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite</option>
-                <option value="models/gemini-3-flash">Gemini 3 Flash</option>
-                <option value="models/gemini-3-pro">Gemini 3 Pro</option>
-                <option value="models/gemini-2.5-pro">Gemini 2.5 Pro</option>
+                <option value="models/gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
               </select>
             </div>
           </div>
