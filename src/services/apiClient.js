@@ -269,6 +269,29 @@ export const apiClient = {
     });
     return res.data;
   },
+
+  // Selection Rules CRUD
+  getSelectionRules: async (projectId = 'default') => {
+    const res = await api.get('/selection-rules', { params: { project_id: projectId } });
+    return res.data;
+  },
+
+  saveSelectionRule: async ({ projectId = 'default', title, description, matchMode = 'AND', conditions = [], defaultEcReason }) => {
+    const res = await api.post('/selection-rules', {
+      project_id: projectId,
+      title,
+      description,
+      match_mode: matchMode,
+      conditions,
+      default_ec_reason: defaultEcReason,
+    });
+    return res.data;
+  },
+
+  deleteSelectionRule: async (ruleId, projectId = 'default') => {
+    const res = await api.delete(`/selection-rules/${ruleId}`, { params: { project_id: projectId } });
+    return res.data;
+  },
 };
 
 export default apiClient;

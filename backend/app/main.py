@@ -16,7 +16,8 @@ from .schemas import (
     ProtocolUpdateRequest,
     BulkUpdatePapersRequest,
     BulkDeletePapersRequest,
-    CsvImportRequest
+    CsvImportRequest,
+    SelectionRuleCreate
 )
 from .database import Database
 from .crawlers import (
@@ -463,4 +464,27 @@ def update_protocol(req: ProtocolUpdateRequest):
         ec_list=req.ec_list
     )
     return saved
+
+@app.get("/api/selection-rules")
+def get_selection_rules(project_id: str = "default"):
+    return Database.get_selection_rules(project_id)
+
+@app.post("/api/selection-rules")
+def save_selection_rule(req: SelectionRuleCreate):
+    rule_dict = {
+        "title": req.title,
+        "description": req.description,
+        "match_mode": req.match_mode,
+        "conditions": [c.dict() for c in req.conditions],
+        "default_ec_reason": req.default_ec_reason
+    }
+    return Database.save_selection_rule(req.project_id, rule_dict)
+
+@app.delete("/api/selection-rules/{rule_id}")
+def delete_selection_rule(rule_id: str, project_id: str = "default"):
+    success = Database.delete_selection_rule(rule_id, project_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Selection rule not found.")
+    return {"status": "deleted", "rule_id": rule_id}
+
 

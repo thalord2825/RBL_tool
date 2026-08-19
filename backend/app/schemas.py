@@ -106,4 +106,18 @@ class CsvImportRequest(BaseModel):
     source_label: Optional[str] = "CSV Import"
     papers: List[CsvPaperImportItem]
 
+class SelectionCondition(BaseModel):
+    field: str
+    operator: str
+    value: Optional[str] = ""
+
+class SelectionRuleCreate(BaseModel):
+    title: str
+    description: Optional[str] = ""
+    match_mode: str = "AND"
+    conditions: List[SelectionCondition] = Field(default_factory=list)
+    default_ec_reason: Optional[str] = None
+    project_id: str = "default"
+
+
 

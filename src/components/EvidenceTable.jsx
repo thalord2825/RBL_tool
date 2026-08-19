@@ -28,9 +28,15 @@ import {
   ArrowUpDown,
   RotateCcw,
   SlidersHorizontal,
-  Calendar
+  Calendar,
+  Zap,
+  Sliders,
+  ShieldAlert,
+  ArrowRightLeft
 } from 'lucide-react';
 import AiRationaleModal from './AiRationaleModal';
+import SmartSelectionModal from './SmartSelectionModal';
+import { getBuiltInPresets, filterPapersByRule } from '../services/ruleEvaluator';
 
 export default function EvidenceTable({ 
   papers, 
@@ -55,6 +61,12 @@ export default function EvidenceTable({
   const [sortBy, setSortBy] = useState('UNSCREENED_FIRST'); // 'UNSCREENED_FIRST' | 'NEWEST_HARVEST' | 'YEAR_DESC' | 'YEAR_ASC' | 'TITLE_AZ' | 'CITATIONS_DESC'
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
+  // Smart Selection & Rule Engine State
+  const [isSmartSelectOpen, setIsSmartSelectOpen] = useState(false);
+  const [isSmartModalOpen, setIsSmartModalOpen] = useState(false);
+  const [activeRuleLabel, setActiveRuleLabel] = useState(null);
+  const [activeRuleDefaultEc, setActiveRuleDefaultEc] = useState(null);
+
   const [selectedAbstractPaper, setSelectedAbstractPaper] = useState(null);
   const [selectedRationalePaper, setSelectedRationalePaper] = useState(null);
   const [copiedDoiId, setCopiedDoiId] = useState(null);
@@ -76,6 +88,9 @@ export default function EvidenceTable({
   const [batchEcReason, setBatchEcReason] = useState(ecList[0] || 'EC1: Studies focusing solely on malware analysis, or pure URL identification via hash algorithms without semantic text analysis.');
 
   const masterCheckboxRef = useRef(null);
+  const smartSelectDropdownRef = useRef(null);
+
+  const presets = useMemo(() => getBuiltInPresets(ecList), [ecList]);
 
   // Available unique Sources and Years computed from corpus
   const availableSources = useMemo(() => {
@@ -185,6 +200,48 @@ export default function EvidenceTable({
     setSortBy('UNSCREENED_FIRST');
   };
 
+  // Smart Select Preset Handler
+  const handleSelectPreset = (preset) => {
+    const matched = filterPapersByRule(papers, preset.id, ecList);
+    setSelectedPaperIds(new Set(matched));
+    setActiveRuleLabel(preset.label);
+    setActiveRuleDefaultEc(preset.defaultEcReason || null);
+    if (preset.defaultEcReason) {
+      setBatchEcReason(preset.defaultEcReason);
+    }
+    setIsSmartSelectOpen(false);
+  };
+
+  // Invert current selection
+  const handleInvertSelection = () => {
+    const next = new Set();
+    visibleIds.forEach(id => {
+      if (!selectedPaperIds.has(id)) {
+        next.add(id);
+      }
+    });
+    setSelectedPaperIds(next);
+    setActiveRuleLabel('Inverted Selection');
+  };
+
+  // Smart Modal Selection Callback
+  const handleSmartModalApply = (matchedIdsSet, mode, label) => {
+    setSelectedPaperIds(matchedIdsSet);
+    setActiveRuleLabel(label);
+  };
+
+  // Smart Modal Batch Exclude Callback
+  const handleSmartModalBatchExclude = async (matchedIdsArray, ecReason) => {
+    if (onBulkUpdateStatus && matchedIdsArray.length > 0) {
+      await onBulkUpdateStatus(matchedIdsArray, {
+        status: 'EXCLUDED',
+        exclusion_reason: ecReason
+      });
+    }
+    setSelectedPaperIds(new Set());
+    setActiveRuleLabel(null);
+  };
+
   // Notify parent of filter change
   useEffect(() => {
     if (onFilterChange) {
@@ -203,17 +260,47 @@ export default function EvidenceTable({
     }
   }, [someVisibleSelected, allVisibleSelected]);
 
-  // Escape key clears selection
+  // Global Keyboard Shortcuts (Shift+S, Ctrl+A, Esc)
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Shift+S: Open Smart Selection Modal
+      if (e.shiftKey && (e.key === 'S' || e.key === 's') && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+        e.preventDefault();
+        setIsSmartModalOpen(true);
+        setIsSmartSelectOpen(false);
+      }
+
+      // Ctrl+A / Cmd+A inside evidence table
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A') && !['INPUT', 'TEXTAREA'].includes(e.target.tagName)) {
+        e.preventDefault();
+        setSelectedPaperIds(new Set(visibleIds));
+        setActiveRuleLabel('All Visible Papers');
+      }
+
+      // Escape: Clear selection and close dropdowns
       if (e.key === 'Escape') {
         setSelectedPaperIds(new Set());
         setIsBatchExcluding(false);
+        setIsSmartSelectOpen(false);
+        setActiveRuleLabel(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [visibleIds]);
+
+  // Close smart select dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (smartSelectDropdownRef.current && !smartSelectDropdownRef.current.contains(e.target)) {
+        setIsSmartSelectOpen(false);
+      }
+    };
+    if (isSmartSelectOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isSmartSelectOpen]);
 
   // Update default batch EC when ecList prop changes
   useEffect(() => {
@@ -227,8 +314,10 @@ export default function EvidenceTable({
     const next = new Set(selectedPaperIds);
     if (allVisibleSelected) {
       visibleIds.forEach(id => next.delete(id));
+      setActiveRuleLabel(null);
     } else {
       visibleIds.forEach(id => next.add(id));
+      setActiveRuleLabel('All Visible Papers');
     }
     setSelectedPaperIds(next);
   };
@@ -297,6 +386,7 @@ export default function EvidenceTable({
     }
     setSelectedPaperIds(new Set());
     setIsBatchExcluding(false);
+    setActiveRuleLabel(null);
   };
 
   const handleBulkDelete = async () => {
@@ -308,6 +398,7 @@ export default function EvidenceTable({
         await onBulkDeletePapers(ids);
       }
       setSelectedPaperIds(new Set());
+      setActiveRuleLabel(null);
     }
   };
 
@@ -432,13 +523,13 @@ export default function EvidenceTable({
       {/* MAIN SCREENING TABLE CONTAINER */}
       <div className="flex-1 bg-[#F4F1EA] overflow-y-auto flex flex-col relative">
         
-        {/* MULTI-DIMENSIONAL TOOLBAR (SEARCH + SOURCE + SORT + ADVANCED) */}
+        {/* MULTI-DIMENSIONAL TOOLBAR (SEARCH + SMART SELECT + SOURCE + SORT + ADVANCED) */}
         <div className="p-2.5 bg-[#EFECE4] border-b border-[#DCD6C5] space-y-2 shrink-0">
           
           <div className="flex items-center justify-between gap-3 flex-wrap">
             
             {/* Primary Search Input */}
-            <div className="relative flex-1 min-w-[240px] max-w-md">
+            <div className="relative flex-1 min-w-[220px] max-w-md">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#7A766F]" />
               <input
                 type="text"
@@ -454,6 +545,108 @@ export default function EvidenceTable({
                 >
                   ✕
                 </button>
+              )}
+            </div>
+
+            {/* SMART BULK SELECT TRIGGER & DROPDOWN */}
+            <div className="relative font-mono text-xs" ref={smartSelectDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setIsSmartSelectOpen(!isSmartSelectOpen)}
+                className="bg-[#24221F] hover:bg-[#33312E] text-[#F4F1EA] border border-[#1A1917] px-2.5 py-1.5 rounded font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                title="Smart bulk selection by missing abstract, EC violation, or PICO mismatch"
+              >
+                <Zap className="w-3.5 h-3.5 text-[#EAB308]" />
+                <span>Smart Select</span>
+                <ChevronDown className="w-3 h-3 text-[#A09B8E]" />
+              </button>
+
+              {/* Popover Presets Dropdown */}
+              {isSmartSelectOpen && (
+                <div className="absolute left-0 mt-1 w-80 bg-[#F4F1EA] border-2 border-[#1A1917] shadow-[6px_6px_0px_0px_rgba(26,25,23,0.85)] z-50 p-2 space-y-2 text-xs font-mono animate-in fade-in duration-150 max-h-96 overflow-y-auto">
+                  
+                  {/* Category: Data Quality */}
+                  <div>
+                    <div className="text-[10px] text-[#7A766F] uppercase font-bold px-1.5 py-0.5 border-b border-[#DCD6C5]">
+                      Data Quality & Incomplete Records
+                    </div>
+                    <div className="space-y-0.5 pt-1">
+                      {presets.filter(p => p.category === 'Data Quality').map(preset => (
+                        <button
+                          key={preset.id}
+                          onClick={() => handleSelectPreset(preset)}
+                          className="w-full text-left px-2 py-1.5 hover:bg-[#EAE6DC] rounded flex items-center justify-between transition-colors group cursor-pointer"
+                        >
+                          <span className="font-semibold text-[#1A1917]">{preset.label}</span>
+                          <span className="text-[10px] text-[#7A766F] group-hover:text-[#D94E28] font-bold">
+                            {papers.filter(preset.predicate).length}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Category: Exclusion Criteria */}
+                  <div>
+                    <div className="text-[10px] text-[#C93B2B] uppercase font-bold px-1.5 py-0.5 border-b border-[#DCD6C5]">
+                      Exclusion Criteria (EC Violations)
+                    </div>
+                    <div className="space-y-0.5 pt-1">
+                      {presets.filter(p => p.category === 'Exclusion Criteria (EC)').map(preset => (
+                        <button
+                          key={preset.id}
+                          onClick={() => handleSelectPreset(preset)}
+                          className="w-full text-left px-2 py-1.5 hover:bg-[#FADBD8]/40 rounded flex items-center justify-between transition-colors group cursor-pointer"
+                        >
+                          <span className="font-semibold text-[#1A1917]">{preset.label}</span>
+                          <span className="text-[10px] text-[#C93B2B] font-bold">
+                            {papers.filter(preset.predicate).length}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Category: PICO & AI */}
+                  <div>
+                    <div className="text-[10px] text-[#805AD5] uppercase font-bold px-1.5 py-0.5 border-b border-[#DCD6C5]">
+                      PICO & AI Screening
+                    </div>
+                    <div className="space-y-0.5 pt-1">
+                      {presets.filter(p => p.category === 'PICO Framework' || p.category === 'AI Screening').map(preset => (
+                        <button
+                          key={preset.id}
+                          onClick={() => handleSelectPreset(preset)}
+                          className="w-full text-left px-2 py-1.5 hover:bg-[#E9D8FD]/40 rounded flex items-center justify-between transition-colors group cursor-pointer"
+                        >
+                          <span className="font-semibold text-[#1A1917]">{preset.label}</span>
+                          <span className="text-[10px] text-[#805AD5] font-bold">
+                            {papers.filter(preset.predicate).length}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Custom Rule Builder Trigger */}
+                  <div className="pt-1.5 border-t border-[#DCD6C5]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsSmartSelectOpen(false);
+                        setIsSmartModalOpen(true);
+                      }}
+                      className="w-full text-left px-2.5 py-2 bg-[#EDE9DF] hover:bg-[#1A1917] hover:text-white rounded flex items-center justify-between font-bold text-[#1A1917] transition-colors cursor-pointer"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <Sliders className="w-3.5 h-3.5 text-[#D94E28]" />
+                        <span>Custom Rule Builder...</span>
+                      </span>
+                      <span className="text-[10px] text-[#7A766F]">Shift+S</span>
+                    </button>
+                  </div>
+
+                </div>
               )}
             </div>
 
@@ -632,7 +825,7 @@ export default function EvidenceTable({
                     checked={allVisibleSelected}
                     onChange={handleToggleSelectAll}
                     className="accent-[#D94E28] cursor-pointer w-3.5 h-3.5"
-                    title="Select / Deselect all visible papers"
+                    title="Select / Deselect all visible papers (Ctrl+A)"
                   />
                 </th>
 
@@ -914,24 +1107,41 @@ export default function EvidenceTable({
 
       </div>
 
-      {/* FLOATING BATCH COMMAND DOCK (STICKY ACTION BAR) */}
+      {/* FLOATING BATCH COMMAND DOCK (STICKY ACTION BAR WITH RULE CONTEXT) */}
       {selectedPaperIds.size > 0 && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[#1A1917] text-[#F4F1EA] border-2 border-[#D94E28] shadow-[0_12px_40px_rgba(0,0,0,0.6)] px-5 py-3 flex items-center gap-4 font-mono text-xs max-w-4xl w-auto select-none animate-in slide-in-from-bottom duration-200">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[#1A1917] text-[#F4F1EA] border-2 border-[#D94E28] shadow-[0_12px_40px_rgba(0,0,0,0.6)] px-5 py-3 flex items-center gap-3.5 font-mono text-xs max-w-5xl w-auto select-none animate-in slide-in-from-bottom duration-200 flex-wrap">
           
-          {/* Summary Badge & Deselect */}
+          {/* Summary Badge & Context Tag */}
           <div className="flex items-center gap-2 pr-3 border-r border-[#4A4843]">
-            <span className="bg-[#D94E28] text-white px-2.5 py-1 font-bold text-xs uppercase tracking-wider">
+            <span className="bg-[#D94E28] text-white px-2.5 py-1 font-bold text-xs uppercase tracking-wider rounded-xs">
               {selectedPaperIds.size} Selected
             </span>
+
+            {activeRuleLabel && (
+              <span className="bg-[#2D2A26] border border-[#55524B] text-[#FDE68A] text-[10px] px-2 py-0.5 font-bold truncate max-w-[200px]" title={activeRuleLabel}>
+                {activeRuleLabel}
+              </span>
+            )}
+
             <button
-              onClick={() => setSelectedPaperIds(new Set())}
-              className="text-[#A09B8E] hover:text-white text-[11px] underline flex items-center gap-1 transition-colors"
+              onClick={() => { setSelectedPaperIds(new Set()); setActiveRuleLabel(null); }}
+              className="text-[#A09B8E] hover:text-white text-[11px] underline flex items-center gap-1 transition-colors ml-1"
               title="Clear selection (Esc)"
             >
               <X className="w-3.5 h-3.5" />
               <span>Deselect (Esc)</span>
             </button>
           </div>
+
+          {/* Invert Selection Button */}
+          <button
+            onClick={handleInvertSelection}
+            className="bg-[#2C2B29] hover:bg-[#383633] text-[#F4F1EA] border border-[#55524B] px-2.5 py-1.5 font-bold flex items-center gap-1.5 transition-colors"
+            title="Invert current paper selection"
+          >
+            <ArrowRightLeft className="w-3 h-3 text-[#38BDF8]" />
+            <span>Invert</span>
+          </button>
 
           {/* Bulk Status Transitions */}
           <div className="flex items-center gap-2">
@@ -979,6 +1189,8 @@ export default function EvidenceTable({
                     {ecList.map((ec, i) => (
                       <option key={i} value={ec}>{ec}</option>
                     ))}
+                    <option value="EC: Failed PICO Framework criteria">EC: Failed PICO Framework criteria</option>
+                    <option value="EC5: Inaccessible record / Missing Abstract">EC5: Inaccessible record / Missing Abstract</option>
                   </select>
                   <div className="flex justify-end gap-2 pt-1">
                     <button
@@ -1025,6 +1237,17 @@ export default function EvidenceTable({
 
         </div>
       )}
+
+      {/* Declarative Smart Bulk Selection & Rule Builder Modal */}
+      <SmartSelectionModal
+        isOpen={isSmartModalOpen}
+        onClose={() => setIsSmartModalOpen(false)}
+        papers={papers}
+        ecList={ecList}
+        currentSelectedIds={selectedPaperIds}
+        onApplySelection={handleSmartModalApply}
+        onBatchExclude={handleSmartModalBatchExclude}
+      />
 
       {/* Dedicated AI Decision & Scientific Rationale Audit Modal */}
       <AiRationaleModal

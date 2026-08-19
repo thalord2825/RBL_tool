@@ -87,6 +87,19 @@ class Database:
                 updated_at TEXT
             )
             """)
+
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS selection_rules (
+                id TEXT PRIMARY KEY,
+                project_id TEXT DEFAULT 'default',
+                title TEXT NOT NULL,
+                description TEXT,
+                match_mode TEXT DEFAULT 'AND',
+                conditions TEXT,
+                default_ec_reason TEXT,
+                created_at TEXT
+            )
+            """)
             conn.commit()
 
     @classmethod
@@ -330,4 +343,63 @@ class Database:
                 "ec_list": ec_list,
                 "updated_at": updated_at
             }
+
+    @classmethod
+    def get_selection_rules(cls, project_id: str = "default") -> List[Dict[str, Any]]:
+        with cls.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM selection_rules WHERE project_id = ? ORDER BY created_at DESC", (project_id,))
+            rows = cursor.fetchall()
+            rules = []
+            for row in rows:
+                d = dict(row)
+                try:
+                    d["conditions"] = json.loads(d["conditions"]) if isinstance(d.get("conditions"), str) else d.get("conditions", [])
+                except Exception:
+                    d["conditions"] = []
+                rules.append(d)
+            return rules
+
+    @classmethod
+    def save_selection_rule(cls, project_id: str, rule: Dict[str, Any]) -> Dict[str, Any]:
+        with cls.get_connection() as conn:
+            cursor = conn.cursor()
+            rule_id = rule.get("id") or f"SR{int(datetime.now().timestamp()*1000)}"
+            title = rule.get("title", "Custom Selection Rule")
+            desc = rule.get("description", "")
+            match_mode = rule.get("match_mode", "AND")
+            conditions_json = json.dumps(rule.get("conditions", []))
+            default_ec_reason = rule.get("default_ec_reason")
+            created_at = datetime.now().isoformat()
+
+            cursor.execute("""
+            INSERT INTO selection_rules (id, project_id, title, description, match_mode, conditions, default_ec_reason, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title = excluded.title,
+                description = excluded.description,
+                match_mode = excluded.match_mode,
+                conditions = excluded.conditions,
+                default_ec_reason = excluded.default_ec_reason
+            """, (rule_id, project_id, title, desc, match_mode, conditions_json, default_ec_reason, created_at))
+            conn.commit()
+
+            return {
+                "id": rule_id,
+                "project_id": project_id,
+                "title": title,
+                "description": desc,
+                "match_mode": match_mode,
+                "conditions": rule.get("conditions", []),
+                "default_ec_reason": default_ec_reason,
+                "created_at": created_at
+            }
+
+    @classmethod
+    def delete_selection_rule(cls, rule_id: str, project_id: str = "default") -> bool:
+        with cls.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM selection_rules WHERE id = ? AND project_id = ?", (rule_id, project_id))
+            conn.commit()
+            return cursor.rowcount > 0
 
