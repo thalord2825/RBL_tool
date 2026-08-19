@@ -22,11 +22,11 @@ export default function DeleteConfirmModal({
       if (onConfirm) {
         await onConfirm(isBulk ? paperIds : paper?.id);
       }
-      onClose();
     } catch (err) {
       console.error('Delete error:', err);
     } finally {
       setIsDeleting(false);
+      onClose();
     }
   };
 

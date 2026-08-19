@@ -563,16 +563,18 @@ export default function App() {
   };
 
   const handleDeletePaper = async (paperId) => {
+    // 0ms Instant Optimistic UI update
+    setPapers(prev => prev.filter(p => p.id !== paperId));
+
     try {
       const res = await apiClient.deletePaper(paperId);
       if (res && res.papers) {
         setPapers(res.papers);
-      } else {
-        setPapers(prev => prev.filter(p => p.id !== paperId));
       }
       addLog('WARN', `Deleted paper [${paperId}] from corpus.`);
     } catch (err) {
       addLog('ERROR', `Failed to delete paper: ${err.message}`);
+      fetchPapers();
     }
   };
 

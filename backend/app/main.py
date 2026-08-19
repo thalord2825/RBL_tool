@@ -409,11 +409,9 @@ def update_paper(paper_id: str, updates: PaperUpdate, project_id: str = "default
 @app.delete("/api/papers/{paper_id}")
 def delete_paper(paper_id: str, project_id: str = "default"):
     success = Database.delete_paper(paper_id, project_id=project_id)
-    if not success:
-        raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found.")
     all_papers = Database.get_all_papers(project_id)
     flagged = DeduplicationEngine.flag_corpus_duplicates(all_papers)
-    return {"status": "deleted", "id": paper_id, "papers": flagged}
+    return {"status": "deleted" if success else "already_removed", "id": paper_id, "papers": flagged}
 
 @app.post("/api/papers/bulk-update")
 def bulk_update_papers(req: BulkUpdatePapersRequest):
