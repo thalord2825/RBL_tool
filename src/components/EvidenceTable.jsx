@@ -38,7 +38,10 @@ import {
   Globe,
   Loader2,
   Save,
-  RefreshCw
+  RefreshCw,
+  BookOpen,
+  PlusCircle,
+  FileSpreadsheet
 } from 'lucide-react';
 import AiRationaleModal from './AiRationaleModal';
 import SmartSelectionModal from './SmartSelectionModal';
@@ -61,7 +64,10 @@ export default function EvidenceTable({
   ecList = [],
   selectedPaperIds: externalSelectedIds,
   onSelectionChange,
-  onFilterChange
+  onFilterChange,
+  isLoading = false,
+  onOpenAddPaper,
+  onOpenCsvImport
 }) {
   const [filterStage, setFilterStage] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -249,6 +255,7 @@ export default function EvidenceTable({
   const hasActiveFilters = selectedSource !== 'ALL' || authorFilter.trim() !== '' || yearFilter !== 'ALL' || searchTerm.trim() !== '' || sortBy !== 'UNSCREENED_FIRST';
 
   const handleResetFilters = () => {
+    setFilterStage('ALL');
     setSelectedSource('ALL');
     setAuthorFilter('');
     setYearFilter('ALL');
@@ -1302,10 +1309,119 @@ export default function EvidenceTable({
                 );
               })}
 
-              {filteredPapers.length === 0 && (
+              {/* 1. Loading Skeleton Shimmer State */}
+              {isLoading && (
+                <>
+                  {[...Array(6)].map((_, idx) => (
+                    <tr key={`skeleton-${idx}`} className="border-b border-[#DCD6C5] bg-[#FAF8F5]/60 animate-pulse select-none">
+                      {/* Col 1: Select & ID */}
+                      <td className="py-4 px-3 w-16">
+                        <div className="flex items-center gap-2">
+                          <div className="w-4 h-4 bg-[#DCD6C5] rounded"></div>
+                          <div className="w-8 h-3.5 bg-[#DCD6C5] rounded font-mono"></div>
+                        </div>
+                      </td>
+
+                      {/* Col 2: Status */}
+                      <td className="py-4 px-3 w-32">
+                        <div className="w-24 h-6 bg-[#DCD6C5] rounded-full"></div>
+                      </td>
+
+                      {/* Col 3: AI Screening Rationale */}
+                      <td className="py-4 px-3 w-40">
+                        <div className="space-y-1.5">
+                          <div className="w-20 h-4 bg-[#DCD6C5] rounded"></div>
+                          <div className="w-28 h-3 bg-[#E5E0D3] rounded"></div>
+                        </div>
+                      </td>
+
+                      {/* Col 4: Publication Details */}
+                      <td className="py-4 px-4">
+                        <div className="space-y-2">
+                          <div className="w-5/6 h-4 bg-[#DCD6C5] rounded"></div>
+                          <div className="w-1/2 h-3 bg-[#E5E0D3] rounded"></div>
+                          <div className="flex items-center gap-2 pt-1">
+                            <div className="w-16 h-3 bg-[#E5E0D3] rounded"></div>
+                            <div className="w-24 h-3 bg-[#E5E0D3] rounded"></div>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Col 5: Evidence Extraction */}
+                      <td className="py-4 px-3 w-32">
+                        <div className="w-24 h-6 bg-[#DCD6C5] rounded"></div>
+                      </td>
+
+                      {/* Col 6: Actions */}
+                      <td className="py-4 px-3 w-12 text-right">
+                        <div className="w-4 h-4 bg-[#DCD6C5] rounded ml-auto"></div>
+                      </td>
+                    </tr>
+                  ))}
+                </>
+              )}
+
+              {/* 2. Completely Empty Corpus (Zero papers in SQLite) */}
+              {!isLoading && papers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center font-mono text-xs text-[#7A766F]">
-                    No papers in corpus matching current filters. Try resetting filters or click <strong>"Harvest Metadata"</strong> above.
+                  <td colSpan={6} className="py-16 px-4 text-center select-none">
+                    <div className="max-w-md mx-auto space-y-4 bg-[#EFECE4] border-2 border-dashed border-[#C8C1AE] p-8 rounded-lg">
+                      <div className="w-12 h-12 bg-[#DCD6C5] rounded-full flex items-center justify-center mx-auto text-[#7A766F]">
+                        <BookOpen className="w-6 h-6" />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="font-serif text-lg font-bold text-[#1A1917]">Your Research Corpus is Empty</h3>
+                        <p className="font-sans text-xs text-[#55524B] leading-relaxed">
+                          There are currently no literature records in your local SQLite database. Get started by harvesting online academic databases, importing a CSV, or adding a paper manually.
+                        </p>
+                      </div>
+                      <div className="flex items-center justify-center gap-2.5 pt-2 flex-wrap">
+                        {onOpenAddPaper && (
+                          <button
+                            onClick={onOpenAddPaper}
+                            className="px-3.5 py-1.5 bg-[#1A1917] hover:bg-[#333] text-white font-mono text-xs font-bold rounded flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5 text-[#38BDF8]" />
+                            <span>Add Paper via DOI / URL</span>
+                          </button>
+                        )}
+                        {onOpenCsvImport && (
+                          <button
+                            onClick={onOpenCsvImport}
+                            className="px-3.5 py-1.5 bg-[#EDE9DF] hover:bg-[#DCD6C5] text-[#1A1917] border border-[#C8C1AE] font-mono text-xs font-bold rounded flex items-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5 text-[#2D7A53]" />
+                            <span>Import CSV</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              )}
+
+              {/* 3. Filter / Search Mismatch (Corpus has papers, but current filters matched 0) */}
+              {!isLoading && papers.length > 0 && filteredPapers.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-14 px-4 text-center select-none">
+                    <div className="max-w-md mx-auto space-y-3 bg-[#FAF8F5] border border-[#DCD6C5] p-6 rounded-lg font-mono">
+                      <div className="w-10 h-10 bg-[#FEF3C7] rounded-full flex items-center justify-center mx-auto text-[#B8860B]">
+                        <Filter className="w-5 h-5" />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="font-serif text-base font-bold text-[#1A1917]">No Publications Match Active Filters</h3>
+                        <p className="font-sans text-xs text-[#7A766F] leading-relaxed">
+                          Found 0 of {papers.length} publications in corpus matching your current search term or filter criteria.
+                        </p>
+                      </div>
+                      <button
+                        onClick={handleResetFilters}
+                        className="px-4 py-1.5 bg-[#1A1917] hover:bg-[#333] text-white text-xs font-bold rounded inline-flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5 text-[#38BDF8]" />
+                        <span>Reset All Active Filters</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               )}

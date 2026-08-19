@@ -699,6 +699,9 @@ export default function App() {
       {/* Main Evidence Screening Matrix with Multi-Select & Floating Batch Dock */}
       <EvidenceTable
         papers={papers}
+        isLoading={isLoading}
+        onOpenAddPaper={() => setIsAddPaperModalOpen(true)}
+        onOpenCsvImport={() => setIsCsvImportModalOpen(true)}
         onUpdateStatus={handleUpdateStatus}
         onRequestExclude={(paper) => setExcludingPaper(paper)}
         onOpenExtraction={(paper) => setExtractingPaper(paper)}
