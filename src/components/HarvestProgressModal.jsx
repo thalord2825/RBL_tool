@@ -38,7 +38,8 @@ export default function HarvestProgressModal({
     screenedCount = 0,
     totalToScreen = 0,
     screenLogs = [], // [{ paper_id, title, decision, confidence, exclusion_reason }]
-    aiStats = { INCLUDED: 0, EXCLUDED: 0, UNSURE: 0 }
+    aiStats = { INCLUDED: 0, EXCLUDED: 0, UNSURE: 0 },
+    aiWarning = null
   } = progress;
 
   const completedSources = Object.keys(sourceStatus).length;
@@ -215,6 +216,14 @@ export default function HarvestProgressModal({
                   </span>
                 </div>
               </div>
+
+              {/* AI Warning Box if key is missing or API limit hit */}
+              {aiWarning && (
+                <div className="bg-[#2D1B0D] border border-[#B45309] text-[#FDE68A] p-2.5 rounded text-[11px] flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-[#F59E0B] shrink-0" />
+                  <span>{aiWarning}</span>
+                </div>
+              )}
 
               {/* Streaming Paper Evaluation Feed */}
               {screenLogs && screenLogs.length > 0 ? (

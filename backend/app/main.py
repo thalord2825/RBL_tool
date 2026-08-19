@@ -209,47 +209,52 @@ def stream_search_and_harvest(req: SearchRequest):
 
             yield f"data: {json.dumps({'event': 'stage_change', 'stage': 'AI_SCREEN', 'count': len(unique_new), 'model': req.model_name})}\n\n"
             yield f"data: {json.dumps({'event': 'inline_screen_start', 'count': len(unique_new), 'model': req.model_name})}\n\n"
+            yield f": keep-alive\n\n"
             
-            evaluations = GeminiScreener.screen_papers_batch(
+            paper_map = {p["id"]: p for p in unique_new}
+            screened_counter = 0
+
+            for chunk_event in GeminiScreener.screen_papers_concurrent_generator(
                 papers=unique_new,
                 pico=pico,
                 ic_list=ic_list,
                 ec_list=ec_list,
                 api_key=req.api_key,
                 model_name=req.model_name,
-                research_context=req.research_context
-            )
+                research_context=req.research_context,
+                max_workers=3
+            ):
+                event_type = chunk_event.get("type")
+                if event_type == "warning":
+                    yield f"data: {json.dumps({'event': 'ai_warning', 'message': chunk_event.get('message', '')})}\n\n"
+                elif event_type == "chunk_warning":
+                    logger.warning(f"Chunk warning: {chunk_event.get('error')}")
+                elif event_type == "chunk_success":
+                    for eval_item in chunk_event.get("evaluations", []):
+                        pid = eval_item.get("id")
+                        p = paper_map.get(pid)
+                        if p:
+                            decision = eval_item.get("decision", "UNSURE")
+                            confidence = eval_item.get("confidence_score", 0.8)
+                            rationale = eval_item.get("scientific_rationale", "")
+                            exc_reason = eval_item.get("exclusion_reason")
 
-            eval_map = {e["id"]: e for e in evaluations if "id" in e}
-            screened_unique = []
-            screened_counter = 0
+                            p["status"] = decision
+                            p["ai_decision"] = decision
+                            p["ai_confidence"] = confidence
+                            p["ai_rationale"] = rationale
+                            p["exclusion_reason"] = exc_reason
 
-            for p in unique_new:
-                e_info = eval_map.get(p["id"])
-                if e_info:
-                    decision = e_info.get("decision", "PENDING")
-                    confidence = e_info.get("confidence_score", 0.8)
-                    rationale = e_info.get("scientific_rationale", "")
-                    exc_reason = e_info.get("exclusion_reason")
+                            if decision in ai_stats:
+                                ai_stats[decision] += 1
+                            screened_counter += 1
 
-                    p["status"] = decision
-                    p["ai_decision"] = decision
-                    p["ai_confidence"] = confidence
-                    p["ai_rationale"] = rationale
-                    p["exclusion_reason"] = exc_reason
+                            yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': pid, 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats})}\n\n"
 
-                    if decision in ai_stats:
-                        ai_stats[decision] += 1
-                    screened_counter += 1
+                yield f": keep-alive\n\n"
 
-                    yield f"data: {json.dumps({'event': 'paper_screened', 'paper_id': p['id'], 'title': p.get('title', '')[:80], 'decision': decision, 'confidence': confidence, 'exclusion_reason': exc_reason, 'screened_count': screened_counter, 'total_to_screen': len(unique_new), 'ai_stats': ai_stats})}\n\n"
-                
-                # Check discard_excluded setting
-                if req.discard_excluded and p.get("status") == "EXCLUDED":
-                    continue
-                screened_unique.append(p)
-
-            unique_new = screened_unique
+            if req.discard_excluded:
+                unique_new = [p for p in unique_new if p.get("status") != "EXCLUDED"]
 
         if unique_new:
             Database.save_papers(unique_new, project_id=req.project_id)

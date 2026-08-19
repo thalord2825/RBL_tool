@@ -3,47 +3,64 @@ import logging
 import os
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Generator
 from ..database import Database
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FALLBACKS = [
-    "models/gemini-flash-latest",
     "models/gemini-2.5-flash",
+    "models/gemini-flash-latest",
     "models/gemini-2.5-flash-lite",
-    "models/gemini-3-flash",
-    "models/gemini-3-pro",
     "models/gemini-2.5-pro",
+    "models/gemini-3-flash",
 ]
 
-CHUNK_SIZE = 10  # Process 10 papers per batch to guarantee zero timeouts and fast feedback
+MICRO_CHUNK_SIZE = 6  # 6 papers per micro-chunk for ultra-fast parallel throughput
 
 class GeminiScreener:
-    @staticmethod
-    def get_available_models(api_key: str) -> List[str]:
+    _cached_models: Optional[List[str]] = None
+    _cached_key: Optional[str] = None
+
+    @classmethod
+    def get_available_models(cls, api_key: str) -> List[str]:
         """
-        Queries Google Gemini ModelService to get all supported model names for this specific API key.
+        Queries Google Gemini ModelService with caching to prevent redundant HTTP requests.
         """
+        if cls._cached_models and cls._cached_key == api_key:
+            return cls._cached_models
+
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=100"
-            res = requests.get(url, timeout=10)
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}&pageSize=50"
+            res = requests.get(url, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 models = [
                     m.get("name") for m in data.get("models", [])
                     if "generateContent" in m.get("supportedGenerationMethods", [])
                 ]
-                if not models:
-                    logger.error("ListModels returned HTTP 200 but found 0 models supporting generateContent.")
-                else:
-                    logger.info(f"Available Gemini models for key: {models}")
-                return models
-            else:
-                logger.error(f"ListModels call failed with HTTP {res.status_code}: {res.text}")
+                if models:
+                    cls._cached_models = models
+                    cls._cached_key = api_key
+                    return models
         except Exception as e:
-            logger.error(f"Error querying ListModels: {e}")
-        return []
+            logger.warning(f"Error querying ListModels (will use default candidates): {e}")
+
+        return DEFAULT_FALLBACKS
+
+    @classmethod
+    def _build_candidate_models(cls, api_key: str, model_name: Optional[str] = None) -> List[str]:
+        candidates = []
+        if model_name and model_name != "auto":
+            clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
+            candidates.append(clean_m)
+
+        for fb in DEFAULT_FALLBACKS:
+            if fb not in candidates:
+                candidates.append(fb)
+
+        return candidates
 
     @classmethod
     def _evaluate_single_chunk(
@@ -58,7 +75,7 @@ class GeminiScreener:
         research_context: Optional[str] = ""
     ) -> List[Dict[str, Any]]:
         """
-        Evaluates a single chunk of <= 10 papers using candidate models.
+        Evaluates a single micro-chunk (<= 6 papers) with fast timeout (15s).
         """
         papers_payload = []
         for p in chunk_papers:
@@ -77,8 +94,8 @@ RESEARCHER CONTEXT & DOMAIN GUIDANCE (RELAXATION / PRIORITY DIRECTIVES):
 ----------------------------------------------------------------------
 {research_context.strip()}
 ----------------------------------------------------------------------
-NOTE: The lead researcher provided the above specific domain context, priority rules, and criteria relaxation guidance.
-If the researcher specifies relaxations (e.g. accepting Southeast Asian or global telecom SMS/phishing scam datasets when Vietnam-specific data is scarce, or including PLM transformer architectures), you MUST follow this researcher guidance with HIGHEST PRIORITY.
+NOTE: The lead researcher provided the above domain context and relaxation guidance.
+If the researcher specifies relaxations (e.g. accepting Southeast Asian or global telecom SMS/phishing scam datasets when Vietnam data is scarce, or including PLM transformer architectures), you MUST follow this guidance with HIGHEST PRIORITY.
 """
 
         system_instruction = f"""
@@ -139,7 +156,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
             for api_ver in ["v1beta", "v1"]:
                 url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
                 try:
-                    response = requests.post(url, headers=headers, json=payload, timeout=40)
+                    response = requests.post(url, headers=headers, json=payload, timeout=15)
                     if response.status_code == 200:
                         result_json = response.json()
                         candidates = result_json.get("candidates", [])
@@ -159,15 +176,15 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                         evaluations = json.loads(cleaned_text)
                         return evaluations
                     else:
-                        last_error = response.text
+                        last_error = f"HTTP {response.status_code}: {response.text[:200]}"
                 except Exception as e:
                     last_error = str(e)
                     continue
 
-        raise Exception(f"Gemini API Chunk Error: {last_error}")
+        raise Exception(f"Gemini API Error: {last_error}")
 
     @classmethod
-    def screen_papers_batch(
+    def screen_papers_concurrent_generator(
         cls,
         papers: List[Dict[str, Any]],
         pico: Dict[str, str],
@@ -176,39 +193,29 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         api_key: Optional[str] = None,
         model_name: Optional[str] = None,
         research_question: str = "How effective are prompt-based LLMs (few-shot) compared with a fine-tuned PhoBERT model for Vietnamese scam message classification?",
-        research_context: Optional[str] = ""
-    ) -> List[Dict[str, Any]]:
+        research_context: Optional[str] = "",
+        max_workers: int = 3
+    ) -> Generator[Dict[str, Any], None, None]:
         """
-        Synchronous batch screening for micro-batch inline stream harvesting.
+        High-throughput parallel micro-batch generator for real-time stream harvesting.
+        Yields chunk evaluation items concurrently as they finish.
         """
         gemini_key = api_key or os.environ.get("GEMINI_API_KEY")
-        if not gemini_key or not papers:
-            return []
+        if not gemini_key:
+            logger.warning("No GEMINI_API_KEY available. Skipping inline AI screening.")
+            yield {"type": "warning", "message": "Gemini API key is not configured. Papers will be saved as PENDING."}
+            return
 
-        available_models = cls.get_available_models(gemini_key)
-        candidates_to_try = []
+        if not papers:
+            return
 
-        if model_name and model_name != "auto":
-            clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
-            candidates_to_try.append(clean_m)
+        candidates_to_try = cls._build_candidate_models(gemini_key, model_name)
+        chunks = [papers[i:i + MICRO_CHUNK_SIZE] for i in range(0, len(papers), MICRO_CHUNK_SIZE)]
 
-        if available_models:
-            flash_models = [m for m in available_models if "flash" in m.lower() and "flash-lite" not in m.lower() and "-8b" not in m.lower()]
-            other_models = [m for m in available_models if m not in flash_models]
-            for m in flash_models + other_models:
-                if m not in candidates_to_try:
-                    candidates_to_try.append(m)
-
-        for fb in DEFAULT_FALLBACKS:
-            if fb not in candidates_to_try:
-                candidates_to_try.append(fb)
-
-        chunks = [papers[i:i + CHUNK_SIZE] for i in range(0, len(papers), CHUNK_SIZE)]
-        all_evals = []
-
-        for chunk in chunks:
+        def process_chunk(chunk_idx, chunk):
+            st = time.time()
             try:
-                chunk_res = cls._evaluate_single_chunk(
+                res = cls._evaluate_single_chunk(
                     chunk_papers=chunk,
                     pico=pico,
                     ic_list=ic_list,
@@ -218,12 +225,35 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                     research_question=research_question,
                     research_context=research_context
                 )
-                if chunk_res:
-                    all_evals.extend(chunk_res)
-            except Exception as e:
-                logger.error(f"Batch chunk evaluation error: {e}")
+                dur = round(time.time() - st, 2)
+                return chunk_idx, chunk, res, None, dur
+            except Exception as ex:
+                dur = round(time.time() - st, 2)
+                return chunk_idx, chunk, [], str(ex), dur
 
-        return all_evals
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_chunk, idx, ch): idx for idx, ch in enumerate(chunks)}
+
+            for future in as_completed(futures):
+                try:
+                    c_idx, chunk, evals, err, dur = future.result()
+                    if err:
+                        logger.warning(f"Micro-chunk {c_idx} evaluation warning: {err}")
+                        yield {
+                            "type": "chunk_warning",
+                            "chunk_idx": c_idx,
+                            "error": err,
+                            "chunk": chunk
+                        }
+                    else:
+                        yield {
+                            "type": "chunk_success",
+                            "chunk_idx": c_idx,
+                            "evaluations": evals,
+                            "duration_sec": dur
+                        }
+                except Exception as fut_err:
+                    logger.error(f"Future error in concurrent screening: {fut_err}")
 
     @classmethod
     def screen_papers_stream(
@@ -239,8 +269,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         project_id: str = "default"
     ) -> Generator[str, None, None]:
         """
-        Micro-batch streaming generator for Server-Sent Events (SSE).
-        Processes candidate papers in chunks of 10, yields live progress, and incrementally saves to SQLite DB.
+        Micro-batch streaming generator for full manual AI screening modal.
         """
         gemini_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not gemini_key:
@@ -252,95 +281,47 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
             return
 
         total_papers = len(papers)
-        chunks = [papers[i:i + CHUNK_SIZE] for i in range(0, total_papers, CHUNK_SIZE)]
+        candidates_to_try = cls._build_candidate_models(gemini_key, model_name)
+        active_model = candidates_to_try[0] if candidates_to_try else "models/gemini-2.5-flash"
+
+        chunks = [papers[i:i + MICRO_CHUNK_SIZE] for i in range(0, total_papers, MICRO_CHUNK_SIZE)]
         total_chunks = len(chunks)
 
-        # 1. Discover models
-        available_models = cls.get_available_models(gemini_key)
-        candidates_to_try = []
-
-        if model_name and model_name != "auto":
-            clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
-            candidates_to_try.append(clean_m)
-
-        if available_models:
-            flash_models = []
-            other_models = []
-            for m in available_models:
-                m_lower = m.lower()
-                if "flash" in m_lower and "flash-lite" not in m_lower and "-8b" not in m_lower:
-                    flash_models.append(m)
-                else:
-                    other_models.append(m)
-            for m in flash_models + other_models:
-                if m not in candidates_to_try:
-                    candidates_to_try.append(m)
-
-        for fb in DEFAULT_FALLBACKS:
-            if fb not in candidates_to_try:
-                candidates_to_try.append(fb)
-
-        active_model = candidates_to_try[0] if candidates_to_try else "models/gemini-flash-latest"
-
-        # Emit init event
-        yield f"data: {json.dumps({'event': 'init', 'total_papers': total_papers, 'total_chunks': total_chunks, 'chunk_size': CHUNK_SIZE, 'active_model': active_model})}\n\n"
+        yield f"data: {json.dumps({'event': 'init', 'total_papers': total_papers, 'total_chunks': total_chunks, 'chunk_size': MICRO_CHUNK_SIZE, 'active_model': active_model})}\n\n"
 
         stats = {"INCLUDED": 0, "EXCLUDED": 0, "UNSURE": 0}
         evaluated_count = 0
-        all_evaluations = []
         paper_map = {p["id"]: p for p in papers}
-
         start_time = time.time()
 
         for chunk_idx, chunk in enumerate(chunks, 1):
-            chunk_start_time = time.time()
-            chunk_ids = [p["id"] for p in chunk]
+            chunk_start = time.time()
+            yield f"data: {json.dumps({'event': 'chunk_start', 'chunk_idx': chunk_idx, 'total_chunks': total_chunks, 'chunk_size': len(chunk)})}\n\n"
 
-            # Emit chunk start
-            yield f"data: {json.dumps({'event': 'chunk_start', 'chunk_idx': chunk_idx, 'total_chunks': total_chunks, 'chunk_size': len(chunk), 'paper_ids': chunk_ids})}\n\n"
+            try:
+                evals = cls._evaluate_single_chunk(
+                    chunk_papers=chunk,
+                    pico=pico,
+                    ic_list=ic_list,
+                    ec_list=ec_list,
+                    gemini_key=gemini_key,
+                    candidates_to_try=candidates_to_try,
+                    research_question=research_question,
+                    research_context=research_context
+                )
 
-            chunk_evals = []
-            retry_count = 0
-            max_retries = 2
-            success = False
-
-            while retry_count <= max_retries and not success:
-                try:
-                    chunk_evals = cls._evaluate_single_chunk(
-                        chunk_papers=chunk,
-                        pico=pico,
-                        ic_list=ic_list,
-                        ec_list=ec_list,
-                        gemini_key=gemini_key,
-                        candidates_to_try=candidates_to_try,
-                        research_question=research_question,
-                        research_context=research_context
-                    )
-                    success = True
-                except Exception as e:
-                    retry_count += 1
-                    logger.warning(f"Chunk {chunk_idx} failed (attempt {retry_count}/{max_retries + 1}): {e}")
-                    if retry_count <= max_retries:
-                        time.sleep(2.0)
-                    else:
-                        yield f"data: {json.dumps({'event': 'chunk_error', 'chunk_idx': chunk_idx, 'error': str(e)})}\n\n"
-
-            if success and chunk_evals:
-                # Incremental SQLite Save + Per-Paper Event Emission
-                for eval_item in chunk_evals:
-                    paper_id = eval_item.get("id")
-                    decision = eval_item.get("decision", "UNSURE")
-                    confidence = eval_item.get("confidence_score", 0.0)
-                    exclusion_reason = eval_item.get("exclusion_reason")
-                    rationale = eval_item.get("scientific_rationale", "")
+                for item in evals:
+                    paper_id = item.get("id")
+                    decision = item.get("decision", "UNSURE")
+                    confidence = item.get("confidence_score", 0.8)
+                    exclusion_reason = item.get("exclusion_reason")
+                    rationale = item.get("scientific_rationale", "")
 
                     if decision in stats:
                         stats[decision] += 1
-
                     evaluated_count += 1
-                    all_evaluations.append(eval_item)
 
-                    # Incremental DB update
+                    # DB incremental update
                     update_data = {
                         "ai_decision": decision,
                         "ai_confidence": confidence,
@@ -355,85 +336,21 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                     try:
                         Database.update_paper(paper_id, update_data, project_id=project_id)
                     except Exception as db_err:
-                        logger.error(f"Failed to incrementally update paper {paper_id}: {db_err}")
+                        logger.error(f"Failed to update paper {paper_id}: {db_err}")
 
-                    # Calculate ETA
                     elapsed = time.time() - start_time
                     avg_per_paper = elapsed / max(1, evaluated_count)
-                    remaining_papers = total_papers - evaluated_count
-                    eta_seconds = int(remaining_papers * avg_per_paper)
+                    remaining = total_papers - evaluated_count
+                    eta = int(remaining * avg_per_paper)
 
-                    # Stream individual paper verdict event
                     paper_meta = paper_map.get(paper_id, {})
-                    matched_criteria = eval_item.get("matched_criteria", [])
-                    yield f"data: {json.dumps({'event': 'paper_evaluated', 'paper_id': paper_id, 'title': paper_meta.get('title', ''), 'year': paper_meta.get('year', ''), 'source': paper_meta.get('source', ''), 'decision': decision, 'confidence': confidence, 'exclusion_reason': exclusion_reason, 'rationale': rationale, 'matched_criteria': matched_criteria, 'raw_json': eval_item, 'evaluated_count': evaluated_count, 'total_papers': total_papers, 'progress_percent': round((evaluated_count / total_papers) * 100, 1), 'stats': stats, 'eta_seconds': eta_seconds, 'latency_seconds': round(time.time() - chunk_start_time, 2)})}\n\n"
+                    yield f"data: {json.dumps({'event': 'paper_evaluated', 'paper_id': paper_id, 'title': paper_meta.get('title', ''), 'year': paper_meta.get('year', ''), 'source': paper_meta.get('source', ''), 'decision': decision, 'confidence': confidence, 'exclusion_reason': exclusion_reason, 'rationale': rationale, 'matched_criteria': item.get('matched_criteria', []), 'raw_json': item, 'evaluated_count': evaluated_count, 'total_papers': total_papers, 'progress_percent': round((evaluated_count / total_papers) * 100, 1), 'stats': stats, 'eta_seconds': eta, 'latency_seconds': round(time.time() - chunk_start, 2)})}\n\n"
 
-            # Emit chunk completion
-            chunk_duration = round(time.time() - chunk_start_time, 2)
-            yield f"data: {json.dumps({'event': 'chunk_done', 'chunk_idx': chunk_idx, 'total_chunks': total_chunks, 'duration_sec': chunk_duration})}\n\n"
+            except Exception as e:
+                logger.error(f"Chunk {chunk_idx} failed: {e}")
+                yield f"data: {json.dumps({'event': 'chunk_error', 'chunk_idx': chunk_idx, 'error': str(e)})}\n\n"
 
-        # Final complete event
+            yield f": heartbeat\n\n"
+
         final_papers = Database.get_all_papers(project_id)
         yield f"data: {json.dumps({'event': 'complete', 'total_papers': total_papers, 'evaluated_count': evaluated_count, 'stats': stats, 'total_duration_sec': round(time.time() - start_time, 2), 'papers': final_papers})}\n\n"
-
-    @classmethod
-    def screen_papers_batch(
-        cls,
-        papers: List[Dict[str, Any]],
-        pico: Dict[str, str],
-        ic_list: List[str],
-        ec_list: List[str],
-        api_key: Optional[str] = None,
-        model_name: Optional[str] = None,
-        research_question: str = "How effective are prompt-based LLMs (few-shot) compared with a fine-tuned PhoBERT model for Vietnamese scam message classification?"
-    ) -> List[Dict[str, Any]]:
-        """
-        Synchronous batch screening with automatic micro-batching.
-        """
-        gemini_key = api_key or os.environ.get("GEMINI_API_KEY")
-        if not gemini_key:
-            raise ValueError("GEMINI_API_KEY is required for AI screening.")
-
-        if not papers:
-            return []
-
-        available_models = cls.get_available_models(gemini_key)
-        candidates_to_try = []
-
-        if model_name and model_name != "auto":
-            clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
-            candidates_to_try.append(clean_m)
-
-        if available_models:
-            flash_models = []
-            other_models = []
-            for m in available_models:
-                m_lower = m.lower()
-                if "flash" in m_lower and "flash-lite" not in m_lower and "-8b" not in m_lower:
-                    flash_models.append(m)
-                else:
-                    other_models.append(m)
-            for m in flash_models + other_models:
-                if m not in candidates_to_try:
-                    candidates_to_try.append(m)
-
-        for fb in DEFAULT_FALLBACKS:
-            if fb not in candidates_to_try:
-                candidates_to_try.append(fb)
-
-        chunks = [papers[i:i + CHUNK_SIZE] for i in range(0, len(papers), CHUNK_SIZE)]
-        all_evals = []
-
-        for chunk in chunks:
-            evals = cls._evaluate_single_chunk(
-                chunk_papers=chunk,
-                pico=pico,
-                ic_list=ic_list,
-                ec_list=ec_list,
-                gemini_key=gemini_key,
-                candidates_to_try=candidates_to_try,
-                research_question=research_question
-            )
-            all_evals.extend(evals)
-
-        return all_evals

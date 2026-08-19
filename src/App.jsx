@@ -251,6 +251,9 @@ export default function App() {
             addLog('DEDUP', `Starting deduplication on ${eventData.raw_count} raw records...`);
           } else if (eventData.event === 'inline_screen_start') {
             addLog('AI_SCREEN', `⚡ Auto-Screening ${eventData.count} harvested papers using ${eventData.model}...`);
+          } else if (eventData.event === 'ai_warning') {
+            setHarvestProgress(prev => ({ ...prev, aiWarning: eventData.message }));
+            addLog('WARN', `AI Screening: ${eventData.message}`);
           } else if (eventData.event === 'paper_screened') {
             setHarvestProgress(prev => ({
               ...prev,
