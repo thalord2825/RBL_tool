@@ -292,6 +292,30 @@ export const apiClient = {
     const res = await api.delete(`/selection-rules/${ruleId}`, { params: { project_id: projectId } });
     return res.data;
   },
+
+  // Abstract Auto-Recovery & Manual Edit API
+  fetchPaperAbstract: async (paperId, projectId = 'default') => {
+    const res = await api.post(`/papers/${paperId}/fetch-abstract`, null, {
+      params: { project_id: projectId }
+    });
+    return res.data;
+  },
+
+  bulkFetchAbstracts: async ({ paperIds, projectId = 'default' }) => {
+    const res = await api.post('/papers/bulk-fetch-abstracts', {
+      paper_ids: paperIds,
+      project_id: projectId,
+    });
+    return res.data;
+  },
+
+  updatePaperAbstract: async (paperId, abstract, projectId = 'default') => {
+    const res = await api.put(`/papers/${paperId}/abstract`, {
+      abstract,
+      project_id: projectId,
+    });
+    return res.data;
+  },
 };
 
 export default apiClient;

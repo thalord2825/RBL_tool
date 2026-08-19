@@ -611,6 +611,8 @@ export default function App() {
         onBulkUpdateStatus={handleBulkUpdateStatus}
         onBulkDeletePapers={handleBulkDeletePapers}
         onBulkAiScreen={handleBulkAiScreen}
+        onUpdatePaper={(updated) => setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))}
+        onBulkPapersUpdate={(newPapers) => setPapers(newPapers)}
         ecList={ecList}
         selectedPaperIds={selectedPaperIds}
         onSelectionChange={setSelectedPaperIds}

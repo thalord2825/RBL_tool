@@ -32,11 +32,18 @@ import {
   Zap,
   Sliders,
   ShieldAlert,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Pin,
+  PinOff,
+  Globe,
+  Loader2,
+  Save,
+  RefreshCw
 } from 'lucide-react';
 import AiRationaleModal from './AiRationaleModal';
 import SmartSelectionModal from './SmartSelectionModal';
 import { getBuiltInPresets, filterPapersByRule } from '../services/ruleEvaluator';
+import apiClient from '../services/apiClient';
 
 export default function EvidenceTable({ 
   papers, 
@@ -48,6 +55,8 @@ export default function EvidenceTable({
   onBulkUpdateStatus,
   onBulkDeletePapers,
   onBulkAiScreen,
+  onUpdatePaper,
+  onBulkPapersUpdate,
   ecList = [],
   selectedPaperIds: externalSelectedIds,
   onSelectionChange,
@@ -61,13 +70,23 @@ export default function EvidenceTable({
   const [sortBy, setSortBy] = useState('UNSCREENED_FIRST'); // 'UNSCREENED_FIRST' | 'NEWEST_HARVEST' | 'YEAR_DESC' | 'YEAR_ASC' | 'TITLE_AZ' | 'CITATIONS_DESC'
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
+  // Pin Selected Papers to Top State
+  const [pinSelected, setPinSelected] = useState(true);
+
   // Smart Selection & Rule Engine State
   const [isSmartSelectOpen, setIsSmartSelectOpen] = useState(false);
   const [isSmartModalOpen, setIsSmartModalOpen] = useState(false);
   const [activeRuleLabel, setActiveRuleLabel] = useState(null);
   const [activeRuleDefaultEc, setActiveRuleDefaultEc] = useState(null);
 
+  // Abstract Viewer & Inline Editor State
   const [selectedAbstractPaper, setSelectedAbstractPaper] = useState(null);
+  const [isEditingAbstract, setIsEditingAbstract] = useState(false);
+  const [editableAbstractText, setEditableAbstractText] = useState('');
+  const [isSavingAbstract, setIsSavingAbstract] = useState(false);
+  const [fetchingAbstractId, setFetchingAbstractId] = useState(null);
+  const [isBulkFetchingAbstracts, setIsBulkFetchingAbstracts] = useState(false);
+
   const [selectedRationalePaper, setSelectedRationalePaper] = useState(null);
   const [copiedDoiId, setCopiedDoiId] = useState(null);
 
@@ -109,7 +128,7 @@ export default function EvidenceTable({
     return Array.from(set).sort((a, b) => b - a);
   }, [papers]);
 
-  // Comprehensive Multi-Dimensional Filter & Smart Sorting
+  // Comprehensive Multi-Dimensional Filter & Smart Sorting with Pinned Selection Priority
   const filteredPapers = useMemo(() => {
     let result = papers.filter(paper => {
       if (!paper) return false;
@@ -149,6 +168,15 @@ export default function EvidenceTable({
 
     // Sorting Engine
     result = [...result].sort((a, b) => {
+      // Priority 1: Pinned Selected Rows to Top (if pinSelected is active)
+      if (pinSelected && selectedPaperIds.size > 0) {
+        const aSel = selectedPaperIds.has(a.id);
+        const bSel = selectedPaperIds.has(b.id);
+        if (aSel && !bSel) return -1;
+        if (!aSel && bSel) return 1;
+      }
+
+      // Priority 2: Active Sort Mode
       if (sortBy === 'UNSCREENED_FIRST') {
         // Priority 0: PENDING and no ai_decision
         const aUnscreened = a.status === 'PENDING' && !a.ai_decision;
@@ -183,11 +211,34 @@ export default function EvidenceTable({
     });
 
     return result;
-  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, sortBy]);
+  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, sortBy, pinSelected, selectedPaperIds]);
 
   const visibleIds = filteredPapers.map(p => p.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedPaperIds.has(id));
   const someVisibleSelected = visibleIds.some(id => selectedPaperIds.has(id));
+
+  // Determine last index of pinned selected items in the list to render divider
+  const lastPinnedIndex = useMemo(() => {
+    if (!pinSelected || selectedPaperIds.size === 0) return -1;
+    let idx = -1;
+    for (let i = 0; i < filteredPapers.length; i++) {
+      if (selectedPaperIds.has(filteredPapers[i].id)) {
+        idx = i;
+      } else {
+        break; // since sorted with selected first
+      }
+    }
+    return idx;
+  }, [filteredPapers, selectedPaperIds, pinSelected]);
+
+  // Count missing abstracts in current selection for bulk action
+  const selectedMissingAbstractCount = useMemo(() => {
+    if (selectedPaperIds.size === 0) return 0;
+    return Array.from(selectedPaperIds).filter(id => {
+      const p = papers.find(x => x.id === id);
+      return !p?.abstract || p.abstract === 'N/A' || p.abstract.trim().length < 25;
+    }).length;
+  }, [selectedPaperIds, papers]);
 
   // Count active non-default filters
   const hasActiveFilters = selectedSource !== 'ALL' || authorFilter.trim() !== '' || yearFilter !== 'ALL' || searchTerm.trim() !== '' || sortBy !== 'UNSCREENED_FIRST';
@@ -240,6 +291,81 @@ export default function EvidenceTable({
     }
     setSelectedPaperIds(new Set());
     setActiveRuleLabel(null);
+  };
+
+  // Single Abstract Fetch Handler
+  const handleFetchSingleAbstract = async (paper) => {
+    setFetchingAbstractId(paper.id);
+    try {
+      const res = await apiClient.fetchPaperAbstract(paper.id);
+      if (res.status === 'success' || res.status === 'already_present') {
+        if (onUpdatePaper && res.paper) {
+          onUpdatePaper(res.paper);
+        }
+        if (selectedAbstractPaper && selectedAbstractPaper.id === paper.id) {
+          setSelectedAbstractPaper(res.paper || { ...selectedAbstractPaper, abstract: res.abstract });
+          setEditableAbstractText(res.abstract);
+        }
+      } else {
+        alert(`Could not resolve abstract automatically for [${paper.id}]. You can manually paste it.`);
+        // Open manual edit modal
+        setSelectedAbstractPaper(paper);
+        setEditableAbstractText(paper.abstract && paper.abstract !== 'N/A' ? paper.abstract : '');
+        setIsEditingAbstract(true);
+      }
+    } catch (err) {
+      alert(`Error fetching abstract: ${err.message}`);
+    } finally {
+      setFetchingAbstractId(null);
+    }
+  };
+
+  // Bulk Abstract Auto-Recovery Handler
+  const handleBulkFetchAbstracts = async () => {
+    const missingIds = Array.from(selectedPaperIds).filter(id => {
+      const p = papers.find(x => x.id === id);
+      return !p?.abstract || p.abstract === 'N/A' || p.abstract.trim().length < 25;
+    });
+
+    if (missingIds.length === 0) return;
+
+    setIsBulkFetchingAbstracts(true);
+    try {
+      const res = await apiClient.bulkFetchAbstracts({ paperIds: missingIds });
+      if (res.papers && onBulkPapersUpdate) {
+        onBulkPapersUpdate(res.papers);
+      }
+      alert(`Auto-Recovery Complete: Resolved ${res.resolved_count} of ${res.total_requested} abstracts from DOI landing pages & academic APIs!`);
+    } catch (err) {
+      alert(`Bulk abstract recovery failed: ${err.message}`);
+    } finally {
+      setIsBulkFetchingAbstracts(false);
+    }
+  };
+
+  // Open Abstract Viewer Modal
+  const handleOpenAbstractViewer = (paper, editMode = false) => {
+    setSelectedAbstractPaper(paper);
+    setEditableAbstractText(paper.abstract && paper.abstract !== 'N/A' ? paper.abstract : '');
+    setIsEditingAbstract(editMode);
+  };
+
+  // Save Manual Abstract
+  const handleSaveManualAbstract = async () => {
+    if (!selectedAbstractPaper) return;
+    setIsSavingAbstract(true);
+    try {
+      const res = await apiClient.updatePaperAbstract(selectedAbstractPaper.id, editableAbstractText);
+      if (onUpdatePaper && res.paper) {
+        onUpdatePaper(res.paper);
+      }
+      setSelectedAbstractPaper(res.paper);
+      setIsEditingAbstract(false);
+    } catch (err) {
+      alert(`Failed to save abstract: ${err.message}`);
+    } finally {
+      setIsSavingAbstract(false);
+    }
   };
 
   // Notify parent of filter change
@@ -523,13 +649,13 @@ export default function EvidenceTable({
       {/* MAIN SCREENING TABLE CONTAINER */}
       <div className="flex-1 bg-[#F4F1EA] overflow-y-auto flex flex-col relative">
         
-        {/* MULTI-DIMENSIONAL TOOLBAR (SEARCH + SMART SELECT + SOURCE + SORT + ADVANCED) */}
+        {/* MULTI-DIMENSIONAL TOOLBAR (SEARCH + SMART SELECT + PIN TOGGLE + SOURCE + SORT + ADVANCED) */}
         <div className="p-2.5 bg-[#EFECE4] border-b border-[#DCD6C5] space-y-2 shrink-0">
           
           <div className="flex items-center justify-between gap-3 flex-wrap">
             
             {/* Primary Search Input */}
-            <div className="relative flex-1 min-w-[220px] max-w-md">
+            <div className="relative flex-1 min-w-[200px] max-w-md">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#7A766F]" />
               <input
                 type="text"
@@ -649,6 +775,23 @@ export default function EvidenceTable({
                 </div>
               )}
             </div>
+
+            {/* PIN SELECTED TO TOP TOGGLE BUTTON */}
+            <button
+              type="button"
+              onClick={() => setPinSelected(!pinSelected)}
+              className={`px-2.5 py-1.5 font-mono text-xs font-bold rounded border flex items-center gap-1.5 transition-all cursor-pointer ${
+                pinSelected && selectedPaperIds.size > 0
+                  ? 'bg-[#D94E28] text-white border-[#A83416] shadow-xs'
+                  : pinSelected
+                  ? 'bg-[#EAE6DC] text-[#1A1917] border-[#C8C1AE]'
+                  : 'bg-[#F8F6F0] text-[#7A766F] border-[#DCD6C5] hover:text-[#1A1917]'
+              }`}
+              title="Pin all selected/checked papers to the top of the table"
+            >
+              {pinSelected ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
+              <span>Pin Selected {selectedPaperIds.size > 0 ? `(${selectedPaperIds.size})` : ''}</span>
+            </button>
 
             {/* Source Filter Dropdown */}
             <div className="flex items-center gap-1.5 font-mono text-xs">
@@ -843,254 +986,301 @@ export default function EvidenceTable({
                 const isExcluded = paper.status === 'EXCLUDED';
                 const isExtracted = isIncluded && paper.tool_model && paper.tool_model !== 'N/A';
                 const confidence = Math.round((paper.ai_confidence || 0.85) * 100);
+                const hasValidAbstract = paper.abstract && paper.abstract !== 'N/A' && paper.abstract.trim().length >= 25;
+                const isFetchingThisAbstract = fetchingAbstractId === paper.id;
+                const isDividerRow = pinSelected && lastPinnedIndex === index && index < filteredPapers.length - 1;
 
                 return (
-                  <tr 
-                    key={paper.id} 
-                    className={`transition-colors align-top ${
-                      isSelected
-                        ? 'bg-[#FFF9EB] hover:bg-[#FFF3D6] border-l-4 border-[#D94E28]'
-                        : paper.duplicate_flag
-                        ? 'bg-[#FFFBEB] hover:bg-[#FEF3C7]' 
-                        : isIncluded 
-                        ? 'bg-[#F4F8F5] hover:bg-[#EAF3EC]' 
-                        : isExcluded 
-                        ? 'bg-[#FDF2F2] hover:bg-[#FAEAEA]' 
-                        : 'bg-[#F4F1EA] hover:bg-[#EFECE4]'
-                    }`}
-                  >
-                    {/* Col 1: Row Select Checkbox */}
-                    <td className="py-3 px-2 text-center">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={(e) => handleRowCheck(paper.id, index, e)}
-                        className="accent-[#D94E28] cursor-pointer w-3.5 h-3.5 mt-1"
-                      />
-                    </td>
+                  <React.Fragment key={paper.id}>
+                    <tr 
+                      className={`transition-colors align-top ${
+                        isSelected
+                          ? 'bg-[#FFF9EB] hover:bg-[#FFF3D6] border-l-4 border-[#D94E28]'
+                          : paper.duplicate_flag
+                          ? 'bg-[#FFFBEB] hover:bg-[#FEF3C7]' 
+                          : isIncluded 
+                          ? 'bg-[#F4F8F5] hover:bg-[#EAF3EC]' 
+                          : isExcluded 
+                          ? 'bg-[#FDF2F2] hover:bg-[#FAEAEA]' 
+                          : 'bg-[#F4F1EA] hover:bg-[#EFECE4]'
+                      }`}
+                    >
+                      {/* Col 1: Row Select Checkbox */}
+                      <td className="py-3 px-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => handleRowCheck(paper.id, index, e)}
+                          className="accent-[#D94E28] cursor-pointer w-3.5 h-3.5 mt-1"
+                        />
+                      </td>
 
-                    {/* Col 2: ID */}
-                    <td className="py-3 px-3 font-mono text-[11px] text-[#7A766F] text-center font-bold">
-                      {paper.id}
-                    </td>
+                      {/* Col 2: ID & Pinned Badge */}
+                      <td className="py-3 px-3 font-mono text-[11px] text-[#7A766F] text-center font-bold">
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span>{paper.id}</span>
+                          {isSelected && pinSelected && (
+                            <span className="text-[9px] text-[#D94E28] font-bold flex items-center gap-0.5" title="Pinned to top">
+                              <Pin className="w-2.5 h-2.5 fill-current" />
+                            </span>
+                          )}
+                        </div>
+                      </td>
 
-                    {/* Col 3: Status & Compact Clickable AI Judge Column */}
-                    <td className="py-3 px-3">
-                      <div className="space-y-1.5">
-                        
-                        {/* Status Dropdown */}
-                        <select
-                          value={paper.status}
-                          onChange={(e) => handleStatusChange(paper, e.target.value)}
-                          className={`font-mono text-[10px] font-bold py-1 px-2 border cursor-pointer uppercase transition-all focus:outline-none w-full ${
-                            isIncluded
-                              ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
-                              : isExcluded
-                              ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
-                              : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A]'
-                          }`}
-                        >
-                          <option value="INCLUDED">✓ INCLUDED</option>
-                          <option value="PENDING">⏳ PENDING</option>
-                          <option value="EXCLUDED">✕ EXCLUDED</option>
-                        </select>
-
-                        {/* Compact Clickable AI Decision Pill */}
-                        {paper.ai_decision && (
-                          <div 
-                            onClick={() => setSelectedRationalePaper(paper)}
-                            className="border border-[#C8C1AE] bg-[#FDFCF9] hover:bg-[#F4F1EA] hover:border-[#D94E28] p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded"
-                            title="Click to view full AI scientific rationale & criteria details"
+                      {/* Col 3: Status & Compact Clickable AI Judge Column */}
+                      <td className="py-3 px-3">
+                        <div className="space-y-1.5">
+                          
+                          {/* Status Dropdown */}
+                          <select
+                            value={paper.status}
+                            onChange={(e) => handleStatusChange(paper, e.target.value)}
+                            className={`font-mono text-[10px] font-bold py-1 px-2 border cursor-pointer uppercase transition-all focus:outline-none w-full ${
+                              isIncluded
+                                ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
+                                : isExcluded
+                                ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
+                                : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A]'
+                            }`}
                           >
-                            <div className="flex items-center justify-between gap-1">
-                              <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border rounded ${
-                                paper.ai_decision === 'INCLUDED'
-                                  ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
-                                  : paper.ai_decision === 'EXCLUDED'
-                                  ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
-                                  : 'bg-[#E9D8FD] text-[#805AD5] border-[#D6BCFA]'
-                              }`}>
-                                <Sparkles className="w-2.5 h-2.5" />
-                                <span>{paper.ai_decision}</span>
-                              </span>
+                            <option value="INCLUDED">✓ INCLUDED</option>
+                            <option value="PENDING">⏳ PENDING</option>
+                            <option value="EXCLUDED">✕ EXCLUDED</option>
+                          </select>
 
-                              <span className="text-[#7A766F] font-bold">
-                                {confidence}%
+                          {/* Compact Clickable AI Decision Pill */}
+                          {paper.ai_decision && (
+                            <div 
+                              onClick={() => setSelectedRationalePaper(paper)}
+                              className="border border-[#C8C1AE] bg-[#FDFCF9] hover:bg-[#F4F1EA] hover:border-[#D94E28] p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded"
+                              title="Click to view full AI scientific rationale & criteria details"
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border rounded ${
+                                  paper.ai_decision === 'INCLUDED'
+                                    ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
+                                    : paper.ai_decision === 'EXCLUDED'
+                                    ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
+                                    : 'bg-[#E9D8FD] text-[#805AD5] border-[#D6BCFA]'
+                                }`}>
+                                  <Sparkles className="w-2.5 h-2.5" />
+                                  <span>{paper.ai_decision}</span>
+                                </span>
+
+                                <span className="text-[#7A766F] font-bold">
+                                  {confidence}%
+                                </span>
+                              </div>
+
+                              {paper.exclusion_reason && (
+                                <div className="text-[#C93B2B] truncate pt-1 font-semibold border-t border-[#EDE9DF] mt-1">
+                                  {paper.exclusion_reason}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Duplicate Alert Pill */}
+                          {paper.duplicate_flag && (
+                            <button
+                              onClick={() => onOpenDuplicateCompare(paper, paper.duplicate_with_id)}
+                              className="w-full bg-[#FEF3C7] border border-[#FDE68A] text-[#B8860B] p-1 font-mono text-[9px] font-bold flex items-center justify-between hover:bg-[#FDE68A] transition-colors rounded"
+                            >
+                              <span className="flex items-center gap-1 truncate">
+                                <AlertTriangle className="w-3 h-3 shrink-0 text-[#D97706]" />
+                                <span>Dup with [{paper.duplicate_with_id}]</span>
+                              </span>
+                              <GitMerge className="w-3 h-3 text-[#D97706] shrink-0" />
+                            </button>
+                          )}
+
+                        </div>
+                      </td>
+
+                      {/* Col 4: 4-Tier High-Clarity Editorial Paper Metadata */}
+                      <td className="py-3 px-4">
+                        <div className="space-y-1.5">
+                          
+                          {/* Tier 1: Title & Canonical Link (Large Modern Academic Font) */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="font-sans text-[16.5px] font-bold text-[#111827] leading-snug tracking-tight">
+                              {paper.url ? (
+                                <a
+                                  href={paper.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="hover:text-[#D94E28] hover:underline inline-flex items-start gap-1.5 group"
+                                >
+                                  <span>{paper.title}</span>
+                                  <ExternalLink className="w-3.5 h-3.5 mt-1 text-[#7A766F] group-hover:text-[#D94E28] shrink-0" />
+                                </a>
+                              ) : (
+                                <span>{paper.title}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Tier 2: Authors Line (Subtle Secondary Attribution) */}
+                          {paper.authors && (
+                            <div className="font-sans text-[11.5px] text-[#666259] flex items-center gap-1.5">
+                              <Users className="w-3 h-3 text-[#A09B8E] shrink-0" />
+                              <span className="truncate max-w-xl" title={paper.authors}>
+                                {paper.authors}
                               </span>
                             </div>
+                          )}
 
-                            {paper.exclusion_reason && (
-                              <div className="text-[#C93B2B] truncate pt-1 font-semibold border-t border-[#EDE9DF] mt-1">
-                                {paper.exclusion_reason}
+                          {/* Tier 3: Metadata Chip Strip (High-Density Structured Pills) */}
+                          <div className="flex items-center gap-1.5 flex-wrap pt-0.5 text-[10px] font-mono">
+                            
+                            {/* Year Chip */}
+                            {paper.year && (
+                              <span className="bg-[#EDE9DF] text-[#1A1917] font-bold px-2 py-0.5 rounded border border-[#DCD6C5]" title="Publication Year">
+                                {paper.year}
+                              </span>
+                            )}
+
+                            {/* Venue Chip */}
+                            {paper.venue && paper.venue !== 'N/A' && (
+                              <span 
+                                className="bg-[#F8F6F0] text-[#4A4843] font-serif italic px-2 py-0.5 rounded border border-[#E5E0D3] max-w-[220px] truncate"
+                                title={`Publication Venue: ${paper.venue}`}
+                              >
+                                {paper.venue}
+                              </span>
+                            )}
+
+                            {/* Source Chip with Color Accent */}
+                            {paper.source && (
+                              <span className={`px-2 py-0.5 rounded font-bold border ${getSourceBadgeStyle(paper.source)}`}>
+                                {paper.source}
+                              </span>
+                            )}
+
+                            {/* DOI Chip with Quick Copy */}
+                            {paper.doi && paper.doi !== 'N/A' && (
+                              <button
+                                onClick={() => handleCopyDoi(paper.id, paper.doi)}
+                                className="bg-[#F4F1EA] hover:bg-[#EDE9DF] text-[#55524C] hover:text-[#1A1917] border border-[#DCD6C5] px-1.5 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
+                                title="Click to copy DOI link"
+                              >
+                                <span>DOI: {paper.doi.length > 22 ? `${paper.doi.slice(0, 20)}...` : paper.doi}</span>
+                                {copiedDoiId === paper.id ? (
+                                  <Check className="w-2.5 h-2.5 text-[#2D7A53]" />
+                                ) : (
+                                  <Copy className="w-2.5 h-2.5 text-[#A09B8E]" />
+                                )}
+                              </button>
+                            )}
+
+                            {/* Citation Count */}
+                            {paper.citations_count !== undefined && paper.citations_count > 0 && (
+                              <span className="bg-[#F8F6F0] text-[#7A766F] border border-[#E5E0D3] px-1.5 py-0.5 rounded font-medium">
+                                Cited: {paper.citations_count}
+                              </span>
+                            )}
+
+                            {/* Matrix Extracted Indicator Chip */}
+                            {isExtracted && (
+                              <span className="bg-[#D4EBD9] text-[#2D7A53] border border-[#98D4A5] px-1.5 py-0.5 rounded font-bold flex items-center gap-1">
+                                <FileText className="w-2.5 h-2.5" />
+                                <span>Matrix ✓</span>
+                              </span>
+                            )}
+
+                            {/* Tier 4: Abstract Action Buttons */}
+                            {hasValidAbstract ? (
+                              <button
+                                onClick={() => handleOpenAbstractViewer(paper, false)}
+                                className="bg-[#EBF8FF] hover:bg-[#BEE3F8] text-[#2B6CB0] hover:text-[#1A365D] border border-[#BEE3F8] hover:border-[#90CDF4] px-2 py-0.5 rounded font-mono text-[10px] font-bold inline-flex items-center gap-1.5 transition-all shadow-2xs group ml-1 cursor-pointer"
+                                title="Click to read full abstract"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-[#3182CE] group-hover:scale-110 transition-transform" />
+                                <span>Read Abstract</span>
+                              </button>
+                            ) : (
+                              <div className="inline-flex items-center gap-1 ml-1">
+                                {/* Auto-Fetch Abstract Button */}
+                                <button
+                                  disabled={isFetchingThisAbstract}
+                                  onClick={() => handleFetchSingleAbstract(paper)}
+                                  className="bg-[#FEF3C7] hover:bg-[#FDE68A] text-[#92400E] border border-[#FDE68A] px-2 py-0.5 rounded font-mono text-[10px] font-bold inline-flex items-center gap-1 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                                  title="Auto-fetch abstract from DOI landing page & academic APIs"
+                                >
+                                  {isFetchingThisAbstract ? (
+                                    <Loader2 className="w-3 h-3 animate-spin text-[#D94E28]" />
+                                  ) : (
+                                    <Globe className="w-3 h-3 text-[#D97706]" />
+                                  )}
+                                  <span>{isFetchingThisAbstract ? 'Fetching...' : 'Fetch Abstract'}</span>
+                                </button>
+
+                                {/* Paste / Edit Abstract Button */}
+                                <button
+                                  onClick={() => handleOpenAbstractViewer(paper, true)}
+                                  className="bg-[#EDE9DF] hover:bg-[#DCD6C5] text-[#55524B] hover:text-[#1A1917] border border-[#C8C1AE] px-1.5 py-0.5 rounded font-mono text-[10px] font-bold inline-flex items-center gap-1 transition-all cursor-pointer"
+                                  title="Manually paste or edit paper abstract"
+                                >
+                                  <Edit3 className="w-3 h-3 text-[#7A766F]" />
+                                  <span>Paste</span>
+                                </button>
+                              </div>
+                            )}
+
+                          </div>
+
+                        </div>
+                      </td>
+
+                      {/* Col 5: Evidence Extraction Status (7 Cols) */}
+                      <td className="py-3 px-3 font-mono text-xs">
+                        {isIncluded ? (
+                          <div className="space-y-1">
+                            <button
+                              onClick={() => onOpenExtraction(paper)}
+                              className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded ${
+                                isExtracted
+                                  ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5] hover:bg-[#C2E4C9]'
+                                  : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A] hover:bg-[#FDE68A]'
+                              }`}
+                            >
+                              <Edit3 className="w-3 h-3" />
+                              <span>{isExtracted ? 'Edit 7-Col Matrix' : '+ Extract Evidence'}</span>
+                            </button>
+
+                            {isExtracted && (
+                              <div className="text-[9px] text-[#4A4843] space-y-0.5 bg-[#FDFCF9] p-1.5 border border-[#DCD6C5] rounded">
+                                <div className="truncate">Model: <strong>{paper.tool_model}</strong></div>
+                                <div className="truncate">Results: <strong>{paper.empirical_results}</strong></div>
                               </div>
                             )}
                           </div>
+                        ) : (
+                          <span className="text-[#A09B8E] text-[10px] italic">—</span>
                         )}
+                      </td>
 
-                        {/* Duplicate Alert Pill */}
-                        {paper.duplicate_flag && (
-                          <button
-                            onClick={() => onOpenDuplicateCompare(paper, paper.duplicate_with_id)}
-                            className="w-full bg-[#FEF3C7] border border-[#FDE68A] text-[#B8860B] p-1 font-mono text-[9px] font-bold flex items-center justify-between hover:bg-[#FDE68A] transition-colors rounded"
-                          >
-                            <span className="flex items-center gap-1 truncate">
-                              <AlertTriangle className="w-3 h-3 shrink-0 text-[#D97706]" />
-                              <span>Dup with [{paper.duplicate_with_id}]</span>
-                            </span>
-                            <GitMerge className="w-3 h-3 text-[#D97706] shrink-0" />
-                          </button>
-                        )}
+                      {/* Col 6: Actions */}
+                      <td className="py-3 px-3 text-right">
+                        <button
+                          onClick={() => onDeletePaper(paper.id)}
+                          className="p-1 hover:bg-[#FADBD8] text-[#7A766F] hover:text-[#C93B2B] transition-colors border border-transparent hover:border-[#F5B7B1] rounded"
+                          title="Delete paper record"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
 
-                      </div>
-                    </td>
-
-                    {/* Col 4: 4-Tier High-Clarity Editorial Paper Metadata */}
-                    <td className="py-3 px-4">
-                      <div className="space-y-1.5">
-                        
-                        {/* Tier 1: Title & Canonical Link (Large Modern Academic Font) */}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="font-sans text-[16.5px] font-bold text-[#111827] leading-snug tracking-tight">
-                            {paper.url ? (
-                              <a
-                                href={paper.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="hover:text-[#D94E28] hover:underline inline-flex items-start gap-1.5 group"
-                              >
-                                <span>{paper.title}</span>
-                                <ExternalLink className="w-3.5 h-3.5 mt-1 text-[#7A766F] group-hover:text-[#D94E28] shrink-0" />
-                              </a>
-                            ) : (
-                              <span>{paper.title}</span>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Tier 2: Authors Line (Subtle Secondary Attribution) */}
-                        {paper.authors && (
-                          <div className="font-sans text-[11.5px] text-[#666259] flex items-center gap-1.5">
-                            <Users className="w-3 h-3 text-[#A09B8E] shrink-0" />
-                            <span className="truncate max-w-xl" title={paper.authors}>
-                              {paper.authors}
-                            </span>
-                          </div>
-                        )}
-
-                        {/* Tier 3: Metadata Chip Strip (High-Density Structured Pills) */}
-                        <div className="flex items-center gap-1.5 flex-wrap pt-0.5 text-[10px] font-mono">
-                          
-                          {/* Year Chip */}
-                          {paper.year && (
-                            <span className="bg-[#EDE9DF] text-[#1A1917] font-bold px-2 py-0.5 rounded border border-[#DCD6C5]" title="Publication Year">
-                              {paper.year}
-                            </span>
-                          )}
-
-                          {/* Venue Chip */}
-                          {paper.venue && paper.venue !== 'N/A' && (
-                            <span 
-                              className="bg-[#F8F6F0] text-[#4A4843] font-serif italic px-2 py-0.5 rounded border border-[#E5E0D3] max-w-[220px] truncate"
-                              title={`Publication Venue: ${paper.venue}`}
-                            >
-                              {paper.venue}
-                            </span>
-                          )}
-
-                          {/* Source Chip with Color Accent */}
-                          {paper.source && (
-                            <span className={`px-2 py-0.5 rounded font-bold border ${getSourceBadgeStyle(paper.source)}`}>
-                              {paper.source}
-                            </span>
-                          )}
-
-                          {/* DOI Chip with Quick Copy */}
-                          {paper.doi && paper.doi !== 'N/A' && (
-                            <button
-                              onClick={() => handleCopyDoi(paper.id, paper.doi)}
-                              className="bg-[#F4F1EA] hover:bg-[#EDE9DF] text-[#55524C] hover:text-[#1A1917] border border-[#DCD6C5] px-1.5 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
-                              title="Click to copy DOI link"
-                            >
-                              <span>DOI: {paper.doi.length > 22 ? `${paper.doi.slice(0, 20)}...` : paper.doi}</span>
-                              {copiedDoiId === paper.id ? (
-                                <Check className="w-2.5 h-2.5 text-[#2D7A53]" />
-                              ) : (
-                                <Copy className="w-2.5 h-2.5 text-[#A09B8E]" />
-                              )}
-                            </button>
-                          )}
-
-                          {/* Citation Count */}
-                          {paper.citations_count !== undefined && paper.citations_count > 0 && (
-                            <span className="bg-[#F8F6F0] text-[#7A766F] border border-[#E5E0D3] px-1.5 py-0.5 rounded font-medium">
-                              Cited: {paper.citations_count}
-                            </span>
-                          )}
-
-                          {/* Matrix Extracted Indicator Chip */}
-                          {isExtracted && (
-                            <span className="bg-[#D4EBD9] text-[#2D7A53] border border-[#98D4A5] px-1.5 py-0.5 rounded font-bold flex items-center gap-1">
-                              <FileText className="w-2.5 h-2.5" />
-                              <span>Matrix ✓</span>
-                            </span>
-                          )}
-
-                          {/* Prominent Eye-Catching Read Abstract Button */}
-                          {paper.abstract && paper.abstract !== 'N/A' && (
-                            <button
-                              onClick={() => setSelectedAbstractPaper(paper)}
-                              className="bg-[#EBF8FF] hover:bg-[#BEE3F8] text-[#2B6CB0] hover:text-[#1A365D] border border-[#BEE3F8] hover:border-[#90CDF4] px-2 py-0.5 rounded font-mono text-[10px] font-bold inline-flex items-center gap-1.5 transition-all shadow-2xs group ml-1 cursor-pointer"
-                              title="Click to open full paper abstract"
-                            >
-                              <Eye className="w-3.5 h-3.5 text-[#3182CE] group-hover:scale-110 transition-transform" />
-                              <span>Read Abstract</span>
-                            </button>
-                          )}
-
-                        </div>
-
-                      </div>
-                    </td>
-
-                    {/* Col 5: Evidence Extraction Status (7 Cols) */}
-                    <td className="py-3 px-3 font-mono text-xs">
-                      {isIncluded ? (
-                        <div className="space-y-1">
-                          <button
-                            onClick={() => onOpenExtraction(paper)}
-                            className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded ${
-                              isExtracted
-                                ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5] hover:bg-[#C2E4C9]'
-                                : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A] hover:bg-[#FDE68A]'
-                            }`}
-                          >
-                            <Edit3 className="w-3 h-3" />
-                            <span>{isExtracted ? 'Edit 7-Col Matrix' : '+ Extract Evidence'}</span>
-                          </button>
-
-                          {isExtracted && (
-                            <div className="text-[9px] text-[#4A4843] space-y-0.5 bg-[#FDFCF9] p-1.5 border border-[#DCD6C5] rounded">
-                              <div className="truncate">Model: <strong>{paper.tool_model}</strong></div>
-                              <div className="truncate">Results: <strong>{paper.empirical_results}</strong></div>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-[#A09B8E] text-[10px] italic">—</span>
-                      )}
-                    </td>
-
-                    {/* Col 6: Actions */}
-                    <td className="py-3 px-3 text-right">
-                      <button
-                        onClick={() => onDeletePaper(paper.id)}
-                        className="p-1 hover:bg-[#FADBD8] text-[#7A766F] hover:text-[#C93B2B] transition-colors border border-transparent hover:border-[#F5B7B1] rounded"
-                        title="Delete paper record"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
+                    {/* Visual Section Divider between Pinned Selected papers and remaining corpus */}
+                    {isDividerRow && (
+                      <tr className="bg-[#EDE9DF] border-y-2 border-[#1A1917]/20 select-none">
+                        <td colSpan={6} className="py-1.5 px-4 font-mono text-[10px] font-bold text-[#7A766F] text-center uppercase tracking-wider">
+                          ─── End of Pinned Selection ({lastPinnedIndex + 1} Papers) • Remaining Records Below ───
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
 
@@ -1107,7 +1297,7 @@ export default function EvidenceTable({
 
       </div>
 
-      {/* FLOATING BATCH COMMAND DOCK (STICKY ACTION BAR WITH RULE CONTEXT) */}
+      {/* FLOATING BATCH COMMAND DOCK (STICKY ACTION BAR WITH RULE CONTEXT & AUTO-RECOVERY) */}
       {selectedPaperIds.size > 0 && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-[#1A1917] text-[#F4F1EA] border-2 border-[#D94E28] shadow-[0_12px_40px_rgba(0,0,0,0.6)] px-5 py-3 flex items-center gap-3.5 font-mono text-xs max-w-5xl w-auto select-none animate-in slide-in-from-bottom duration-200 flex-wrap">
           
@@ -1142,6 +1332,23 @@ export default function EvidenceTable({
             <ArrowRightLeft className="w-3 h-3 text-[#38BDF8]" />
             <span>Invert</span>
           </button>
+
+          {/* Bulk Abstract Auto-Recovery Button (if any selected paper lacks abstract) */}
+          {selectedMissingAbstractCount > 0 && (
+            <button
+              disabled={isBulkFetchingAbstracts}
+              onClick={handleBulkFetchAbstracts}
+              className="bg-[#D97706] hover:bg-[#B45309] text-white px-3 py-1.5 font-bold flex items-center gap-1.5 transition-colors border border-[#92400E] disabled:opacity-50 cursor-pointer"
+              title={`Fetch missing abstracts for ${selectedMissingAbstractCount} selected papers`}
+            >
+              {isBulkFetchingAbstracts ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Globe className="w-3.5 h-3.5" />
+              )}
+              <span>Auto-Recover Abstracts ({selectedMissingAbstractCount})</span>
+            </button>
+          )}
 
           {/* Bulk Status Transitions */}
           <div className="flex items-center gap-2">
@@ -1257,26 +1464,44 @@ export default function EvidenceTable({
         onUpdateStatus={onUpdateStatus}
       />
 
-      {/* Abstract Viewer Modal */}
+      {/* Dual-Mode Abstract Viewer & Editor Modal */}
       {selectedAbstractPaper && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-sans select-none animate-in fade-in duration-200">
-          <div className="bg-[#F4F1EA] border-2 border-[#1A1917] max-w-2xl w-full shadow-[8px_8px_0px_0px_rgba(26,25,23,0.85)] overflow-hidden font-mono flex flex-col max-h-[85vh]">
-            <div className="bg-[#1A1917] text-[#F4F1EA] px-6 py-3 border-b-2 border-[#1A1917] flex items-center justify-between shrink-0">
+          <div className="bg-[#F4F1EA] border-2 border-[#1A1917] max-w-3xl w-full shadow-[8px_8px_0px_0px_rgba(26,25,23,0.85)] overflow-hidden font-mono flex flex-col max-h-[85vh]">
+            
+            {/* Modal Header */}
+            <div className="bg-[#1A1917] text-[#F4F1EA] px-6 py-3.5 border-b-2 border-[#1A1917] flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
-                <Eye className="w-4 h-4 text-[#38BDF8]" />
+                <FileText className="w-4 h-4 text-[#38BDF8]" />
                 <h3 className="font-serif text-base font-bold text-white tracking-wide">
                   [{selectedAbstractPaper.id}] Publication Abstract
                 </h3>
               </div>
-              <button 
-                onClick={() => setSelectedAbstractPaper(null)}
-                className="p-1 hover:bg-[#33312E] text-[#A09B8E] hover:text-white transition-colors"
-                title="Close modal (Esc)"
-              >
-                ✕
-              </button>
+
+              <div className="flex items-center gap-2">
+                {/* Toggle Edit / View Mode */}
+                <button
+                  onClick={() => setIsEditingAbstract(!isEditingAbstract)}
+                  className="px-2.5 py-1 text-[11px] font-bold bg-[#33312E] hover:bg-[#4A4843] text-white rounded border border-[#55524B] flex items-center gap-1 transition-colors"
+                >
+                  <Edit3 className="w-3 h-3 text-[#EAB308]" />
+                  <span>{isEditingAbstract ? 'Reader View' : 'Edit Abstract'}</span>
+                </button>
+
+                <button 
+                  onClick={() => { setSelectedAbstractPaper(null); setIsEditingAbstract(false); }}
+                  className="p-1 hover:bg-[#33312E] text-[#A09B8E] hover:text-white transition-colors"
+                  title="Close modal (Esc)"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
+
+            {/* Modal Body */}
             <div className="p-6 space-y-4 overflow-y-auto flex-1 bg-[#F4F1EA]">
+              
+              {/* Paper Details Card */}
               <div className="bg-[#EFECE4] border border-[#DCD6C5] p-3.5 space-y-1.5 rounded">
                 <div className="font-bold text-[15px] text-[#111827] font-sans leading-snug">
                   {selectedAbstractPaper.title}
@@ -1304,14 +1529,92 @@ export default function EvidenceTable({
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <div className="text-[10px] text-[#7A766F] uppercase font-bold flex items-center gap-1 font-mono">
-                  <span>Abstract Text:</span>
+              {/* View / Edit Mode Content */}
+              {isEditingAbstract ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="font-bold text-[#1A1917]">Edit or Paste Abstract Content:</span>
+                    
+                    {/* Auto Fetch Trigger inside Modal */}
+                    <button
+                      type="button"
+                      disabled={fetchingAbstractId === selectedAbstractPaper.id}
+                      onClick={() => handleFetchSingleAbstract(selectedAbstractPaper)}
+                      className="text-[#D97706] hover:text-[#92400E] font-bold flex items-center gap-1 text-[11px] underline cursor-pointer disabled:opacity-50"
+                    >
+                      <Globe className="w-3 h-3" />
+                      <span>Auto-Fetch from DOI ({selectedAbstractPaper.doi || 'Web'})</span>
+                    </button>
+                  </div>
+
+                  <textarea
+                    rows={8}
+                    value={editableAbstractText}
+                    onChange={(e) => setEditableAbstractText(e.target.value)}
+                    placeholder="Paste full text abstract here..."
+                    className="w-full bg-white border border-[#C8C1AE] p-3 text-xs font-sans text-[#1A1917] leading-relaxed rounded focus:outline-none focus:border-[#D94E28]"
+                  />
+
+                  <div className="flex items-center justify-between text-[10px] text-[#7A766F]">
+                    <span>Character Count: <strong>{editableAbstractText.length}</strong> chars</span>
+                    
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingAbstract(false)}
+                        className="px-3 py-1 bg-[#EDE9DF] hover:bg-[#DCD6C5] text-[#1A1917] font-bold rounded"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isSavingAbstract || editableAbstractText.trim().length === 0}
+                        onClick={handleSaveManualAbstract}
+                        className="px-4 py-1 bg-[#2D7A53] hover:bg-[#236142] text-white font-bold rounded flex items-center gap-1 shadow-xs disabled:opacity-50 cursor-pointer"
+                      >
+                        {isSavingAbstract ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                        <span>Save Changes</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="bg-[#F8F6F0] p-4 border border-[#DCD6C5] border-l-4 border-l-[#D94E28] rounded font-sans text-xs text-[#2C2B29] leading-relaxed shadow-inner">
-                  {selectedAbstractPaper.abstract}
+              ) : (
+                <div className="space-y-1.5">
+                  <div className="text-[10px] text-[#7A766F] uppercase font-bold flex items-center justify-between font-mono">
+                    <span>Abstract Text:</span>
+                    {selectedAbstractPaper.abstract && (
+                      <span>{selectedAbstractPaper.abstract.length} characters</span>
+                    )}
+                  </div>
+                  
+                  {selectedAbstractPaper.abstract && selectedAbstractPaper.abstract !== 'N/A' ? (
+                    <div className="bg-[#F8F6F0] p-4 border border-[#DCD6C5] border-l-4 border-l-[#D94E28] rounded font-sans text-xs text-[#2C2B29] leading-relaxed shadow-inner">
+                      {selectedAbstractPaper.abstract}
+                    </div>
+                  ) : (
+                    <div className="bg-[#FEF3C7]/40 border border-[#FDE68A] p-6 text-center space-y-3 rounded">
+                      <AlertTriangle className="w-6 h-6 text-[#D97706] mx-auto" />
+                      <div className="text-xs font-bold text-[#92400E]">No abstract recorded for this publication.</div>
+                      <div className="flex justify-center gap-2">
+                        <button
+                          onClick={() => handleFetchSingleAbstract(selectedAbstractPaper)}
+                          className="px-3 py-1.5 bg-[#D97706] hover:bg-[#B45309] text-white font-bold text-xs rounded flex items-center gap-1.5 shadow-xs"
+                        >
+                          <Globe className="w-3.5 h-3.5" />
+                          <span>Fetch from DOI Landing Page</span>
+                        </button>
+                        <button
+                          onClick={() => setIsEditingAbstract(true)}
+                          className="px-3 py-1.5 bg-[#EDE9DF] hover:bg-[#DCD6C5] text-[#1A1917] font-bold text-xs rounded"
+                        >
+                          Paste Abstract Manually
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
+
             </div>
           </div>
         </div>

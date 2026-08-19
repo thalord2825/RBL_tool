@@ -119,5 +119,14 @@ class SelectionRuleCreate(BaseModel):
     default_ec_reason: Optional[str] = None
     project_id: str = "default"
 
+class BulkFetchAbstractsRequest(BaseModel):
+    paper_ids: List[str]
+    project_id: str = "default"
+
+class UpdateAbstractRequest(BaseModel):
+    abstract: str
+    project_id: str = "default"
+
+
 
 

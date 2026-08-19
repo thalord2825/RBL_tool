@@ -17,7 +17,9 @@ from .schemas import (
     BulkUpdatePapersRequest,
     BulkDeletePapersRequest,
     CsvImportRequest,
-    SelectionRuleCreate
+    SelectionRuleCreate,
+    BulkFetchAbstractsRequest,
+    UpdateAbstractRequest
 )
 from .database import Database
 from .crawlers import (
@@ -31,6 +33,7 @@ from .engine.dedup_engine import DeduplicationEngine
 from .engine.gemini_screener import GeminiScreener
 from .engine.rbl_exporter import RblExporter
 from .engine.github_atomic import GitHubAtomicCommitter
+from .engine.abstract_resolver import AbstractResolver
 
 # Setup structured logging
 logging.basicConfig(
@@ -486,5 +489,78 @@ def delete_selection_rule(rule_id: str, project_id: str = "default"):
     if not success:
         raise HTTPException(status_code=404, detail="Selection rule not found.")
     return {"status": "deleted", "rule_id": rule_id}
+
+@app.post("/api/papers/{paper_id}/fetch-abstract")
+def fetch_single_paper_abstract(paper_id: str, project_id: str = "default"):
+    papers = Database.get_all_papers(project_id)
+    target = next((p for p in papers if p["id"] == paper_id), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+
+    res = AbstractResolver.resolve_single_paper_abstract(target)
+    if res.get("status") == "resolved" and res.get("abstract"):
+        updated = Database.update_paper(paper_id, {"abstract": res["abstract"]}, project_id=project_id)
+        return {
+            "status": "success",
+            "paper_id": paper_id,
+            "abstract": res["abstract"],
+            "source_resolved": res.get("source"),
+            "paper": updated
+        }
+    elif res.get("status") == "already_present":
+        return {
+            "status": "already_present",
+            "paper_id": paper_id,
+            "abstract": res["abstract"],
+            "source_resolved": res.get("source"),
+            "paper": target
+        }
+    else:
+        return {
+            "status": "not_found",
+            "paper_id": paper_id,
+            "abstract": None,
+            "message": "Unable to resolve abstract from OpenAlex, Semantic Scholar, CrossRef, or publisher page."
+        }
+
+@app.post("/api/papers/bulk-fetch-abstracts")
+def bulk_fetch_abstracts(req: BulkFetchAbstractsRequest):
+    all_papers = Database.get_all_papers(req.project_id)
+    target_papers = [p for p in all_papers if p["id"] in req.paper_ids]
+
+    if not target_papers:
+        raise HTTPException(status_code=404, detail="No matching papers found.")
+
+    results = AbstractResolver.bulk_resolve_abstracts(target_papers, max_workers=5)
+    resolved_count = 0
+
+    for r in results:
+        if r.get("status") == "resolved" and r.get("abstract"):
+            Database.update_paper(r["paper_id"], {"abstract": r["abstract"]}, project_id=req.project_id)
+            resolved_count += 1
+
+    updated_corpus = Database.get_all_papers(req.project_id)
+    flagged = DeduplicationEngine.flag_corpus_duplicates(updated_corpus)
+
+    return {
+        "total_requested": len(target_papers),
+        "resolved_count": resolved_count,
+        "failed_count": len(target_papers) - resolved_count,
+        "results": results,
+        "papers": flagged
+    }
+
+@app.put("/api/papers/{paper_id}/abstract")
+def update_manual_abstract(paper_id: str, req: UpdateAbstractRequest):
+    updated = Database.update_paper(paper_id, {"abstract": req.abstract}, project_id=req.project_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Paper not found.")
+    return {
+        "status": "updated",
+        "paper_id": paper_id,
+        "abstract": req.abstract,
+        "paper": updated
+    }
+
 
 
