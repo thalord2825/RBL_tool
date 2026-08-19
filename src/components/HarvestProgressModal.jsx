@@ -4,7 +4,6 @@ import {
   Loader2, 
   CheckCircle2, 
   AlertCircle, 
-  ShieldAlert, 
   Layers, 
   Bot, 
   Sparkles, 
@@ -20,7 +19,8 @@ import {
 export default function HarvestProgressModal({
   isOpen,
   progress,
-  onClose
+  onClose,
+  onOpenAiScreenPending
 }) {
   if (!isOpen || !progress) return null;
 
@@ -109,7 +109,7 @@ export default function HarvestProgressModal({
           ) : (
             <button
               onClick={onClose}
-              className="p-1 text-[#7A766F] hover:text-white transition-colors"
+              className="p-1 text-[#7A766F] hover:text-white transition-colors cursor-pointer"
               title="Minimize progress window"
             >
               <X className="w-4 h-4" />
@@ -246,8 +246,8 @@ export default function HarvestProgressModal({
 
               {/* Streaming Paper Evaluation Feed */}
               {screenLogs && screenLogs.length > 0 ? (
-                <div className="space-y-1 max-h-36 overflow-y-auto pr-1 text-[11px]">
-                  {screenLogs.slice(-5).reverse().map((log, i) => {
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-1 text-[11px]">
+                  {screenLogs.slice(-8).reverse().map((log, i) => {
                     const isInc = log.decision === 'INCLUDED';
                     const isExc = log.decision === 'EXCLUDED';
                     return (
@@ -342,7 +342,7 @@ export default function HarvestProgressModal({
 
           {/* Comprehensive Yield & Dedup Metrics Footer */}
           {isFinished && (
-            <div className="bg-[#121110] border border-[#2C2B29] p-3.5 rounded text-xs space-y-2">
+            <div className="bg-[#121110] border border-[#2C2B29] p-3.5 rounded text-xs space-y-3">
               <div className="grid grid-cols-3 gap-2 text-center border-b border-[#2C2B29] pb-2">
                 <div>
                   <div className="text-[10px] text-[#7A766F] uppercase">Raw Harvested</div>
@@ -359,7 +359,7 @@ export default function HarvestProgressModal({
               </div>
 
               {autoScreen && (
-                <div className="flex items-center justify-between text-[11px] font-bold pt-1 px-1">
+                <div className="flex items-center justify-between text-[11px] font-bold px-1">
                   <span className="text-[#A09B8E]">AI Screening Breakdown:</span>
                   <div className="flex items-center gap-3">
                     <span className="text-[#4ADE80]">✓ {aiStats.INCLUDED || 0} Included</span>
@@ -368,6 +368,37 @@ export default function HarvestProgressModal({
                   </div>
                 </div>
               )}
+
+              {/* Action Buttons Row */}
+              <div className="flex items-center justify-between pt-1 border-t border-[#2C2B29] flex-wrap gap-2">
+                <div className="text-[11px] text-[#A09B8E]">
+                  Completed in <strong className="text-white font-bold">{duration}s</strong>.
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {onOpenAiScreenPending && (
+                    <button
+                      onClick={() => {
+                        onClose();
+                        onOpenAiScreenPending();
+                      }}
+                      className="px-3 py-1 bg-[#D94E28] hover:bg-[#C4411C] text-white text-xs font-bold rounded-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                      title="Open AI Auto-Screen Modal to evaluate pending papers"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>Screen Pending Papers</span>
+                    </button>
+                  )}
+
+                  <button
+                    onClick={onClose}
+                    className="px-4 py-1 bg-[#2D7A53] hover:bg-[#236142] text-white text-xs font-bold rounded-xs shadow-xs transition-colors cursor-pointer"
+                  >
+                    Done (Esc)
+                  </button>
+                </div>
+              </div>
+
             </div>
           )}
 

@@ -122,6 +122,9 @@ DECISION RULES:
 2. "EXCLUDED": Paper violates PICO scope or explicitly matches ANY Exclusion Criterion (EC1-EC5). You MUST specify the exact matched exclusion_reason (e.g., "EC1: Focuses on network packet headers").
 3. "UNSURE": The abstract is ambiguous, lacks concrete methodology, relevance is borderline, or your confidence is < 0.70.
 
+CRITICAL COMPLETENESS REQUIREMENT:
+You MUST evaluate EVERY SINGLE candidate paper in the input array. If {len(papers_payload)} papers are provided, your output JSON array MUST contain EXACTLY {len(papers_payload)} elements matching their exact IDs.
+
 STRICT JSON OUTPUT FORMAT:
 You MUST output ONLY a valid JSON array matching this exact schema for every input paper:
 [
@@ -155,31 +158,60 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         for model_id in candidates_to_try:
             for api_ver in ["v1beta", "v1"]:
                 url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
-                try:
-                    response = requests.post(url, headers=headers, json=payload, timeout=15)
-                    if response.status_code == 200:
-                        result_json = response.json()
-                        candidates = result_json.get("candidates", [])
-                        if not candidates:
+                
+                for attempt in range(3):
+                    try:
+                        response = requests.post(url, headers=headers, json=payload, timeout=20)
+                        if response.status_code == 200:
+                            result_json = response.json()
+                            candidates = result_json.get("candidates", [])
+                            if not candidates:
+                                continue
+
+                            raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]")
+                            cleaned_text = raw_text.strip()
+                            if cleaned_text.startswith("```json"):
+                                cleaned_text = cleaned_text[7:]
+                            if cleaned_text.startswith("```"):
+                                cleaned_text = cleaned_text[3:]
+                            if cleaned_text.endswith("```"):
+                                cleaned_text = cleaned_text[:-3]
+                            cleaned_text = cleaned_text.strip()
+
+                            evaluations = json.loads(cleaned_text)
+                            if not isinstance(evaluations, list):
+                                evaluations = [evaluations] if isinstance(evaluations, dict) else []
+
+                            # Guarantee every chunk paper has an evaluation item
+                            eval_map = {e.get("id"): e for e in evaluations if isinstance(e, dict) and e.get("id")}
+                            final_evals = []
+                            for p in chunk_papers:
+                                pid = p.get("id")
+                                if pid in eval_map:
+                                    final_evals.append(eval_map[pid])
+                                else:
+                                    # Fallback item if Gemini skipped this ID
+                                    final_evals.append({
+                                        "id": pid,
+                                        "decision": "PENDING",
+                                        "confidence_score": 0.5,
+                                        "matched_criteria": [],
+                                        "exclusion_reason": None,
+                                        "scientific_rationale": "Pending manual / deep batch review"
+                                    })
+                            return final_evals
+
+                        elif response.status_code in [429, 503]:
+                            logger.warning(f"Gemini API rate limited (attempt {attempt+1}/3), backing off...")
+                            time.sleep(1.2 * (attempt + 1))
                             continue
-
-                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "[]")
-                        cleaned_text = raw_text.strip()
-                        if cleaned_text.startswith("```json"):
-                            cleaned_text = cleaned_text[7:]
-                        if cleaned_text.startswith("```"):
-                            cleaned_text = cleaned_text[3:]
-                        if cleaned_text.endswith("```"):
-                            cleaned_text = cleaned_text[:-3]
-                        cleaned_text = cleaned_text.strip()
-
-                        evaluations = json.loads(cleaned_text)
-                        return evaluations
-                    else:
-                        last_error = f"HTTP {response.status_code}: {response.text[:200]}"
-                except Exception as e:
-                    last_error = str(e)
-                    continue
+                        else:
+                            last_error = f"HTTP {response.status_code}: {response.text[:200]}"
+                            break
+                    except Exception as e:
+                        last_error = str(e)
+                        time.sleep(1.0)
+                        continue
 
         raise Exception(f"Gemini API Error: {last_error}")
 
@@ -194,11 +226,11 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         model_name: Optional[str] = None,
         research_question: str = "How effective are prompt-based LLMs (few-shot) compared with a fine-tuned PhoBERT model for Vietnamese scam message classification?",
         research_context: Optional[str] = "",
-        max_workers: int = 3
+        max_workers: int = 2
     ) -> Generator[Dict[str, Any], None, None]:
         """
         High-throughput parallel micro-batch generator for real-time stream harvesting.
-        Yields chunk evaluation items concurrently as they finish.
+        Yields chunk evaluation items concurrently as they finish with rate-limit pacing.
         """
         gemini_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not gemini_key:
@@ -232,7 +264,10 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                 return chunk_idx, chunk, [], str(ex), dur
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(process_chunk, idx, ch): idx for idx, ch in enumerate(chunks)}
+            futures = []
+            for idx, ch in enumerate(chunks):
+                futures.append(executor.submit(process_chunk, idx, ch))
+                time.sleep(0.2)  # Pacing between submissions to prevent burst rate-limits
 
             for future in as_completed(futures):
                 try:

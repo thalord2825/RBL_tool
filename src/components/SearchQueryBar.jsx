@@ -14,7 +14,8 @@ import {
   EyeOff,
   ExternalLink,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Activity
 } from 'lucide-react';
 import { getStoredGeminiApiKey, setStoredGeminiApiKey } from '../services/apiClient';
 
@@ -32,7 +33,9 @@ export default function SearchQueryBar({
   discardExcludedOnHarvest,
   setDiscardExcludedOnHarvest,
   onHarvest,
-  isHarvesting
+  isHarvesting,
+  harvestProgress,
+  onOpenHarvestModal
 }) {
   const [showContextDrawer, setShowContextDrawer] = useState(false);
   const [apiKey, setApiKey] = useState(() => getStoredGeminiApiKey());
@@ -207,6 +210,19 @@ export default function SearchQueryBar({
               </>
             )}
           </button>
+
+          {/* Button 3: Reopen Last Harvest Report */}
+          {harvestProgress && (
+            <button
+              type="button"
+              onClick={onOpenHarvestModal}
+              className="bg-[#1A1917] hover:bg-[#2C2B29] text-[#38BDF8] px-2.5 py-1 flex items-center gap-1.5 text-[11px] font-bold border border-[#38BDF8]/60 rounded-xs cursor-pointer transition-all shadow-2xs"
+              title="Reopen Harvest and AI Telemetry Report"
+            >
+              <Activity className="w-3.5 h-3.5 text-[#38BDF8]" />
+              <span>Report ({harvestProgress.rawCount || 0})</span>
+            </button>
+          )}
 
         </div>
 

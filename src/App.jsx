@@ -636,6 +636,8 @@ export default function App() {
         ecCount={ecList.length}
         isScreening={isScreening}
         aiProgress={aiProgress}
+        harvestProgress={harvestProgress}
+        onOpenHarvestProgressModal={() => setIsHarvestModalOpen(true)}
         onOpenAiScreen={() => setIsAiScreenModalOpen(true)}
         onOpenAiProgressModal={() => setIsAiProgressModalOpen(true)}
         onOpenProtocolModal={() => setIsProtocolModalOpen(true)}
@@ -664,6 +666,8 @@ export default function App() {
         setDiscardExcludedOnHarvest={setDiscardExcludedOnHarvest}
         onHarvest={handleHarvest}
         isHarvesting={isHarvesting}
+        harvestProgress={harvestProgress}
+        onOpenHarvestModal={() => setIsHarvestModalOpen(true)}
       />
 
       {/* Main Evidence Screening Matrix with Multi-Select & Floating Batch Dock */}
@@ -759,6 +763,10 @@ export default function App() {
         isOpen={isHarvestModalOpen}
         progress={harvestProgress}
         onClose={() => setIsHarvestModalOpen(false)}
+        onOpenAiScreenPending={() => {
+          setIsHarvestModalOpen(false);
+          setIsAiScreenModalOpen(true);
+        }}
       />
 
       {/* Duplicate Compare & Merge Modal */}
