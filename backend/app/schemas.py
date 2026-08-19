@@ -133,6 +133,27 @@ class UpdateAbstractRequest(BaseModel):
     abstract: str
     project_id: str = "default"
 
+class FetchMetadataRequest(BaseModel):
+    identifier: str
+
+class ManualPaperItem(BaseModel):
+    title: str
+    authors: Optional[str] = "Unknown Authors"
+    year: Optional[int] = 2024
+    venue: Optional[str] = ""
+    abstract: Optional[str] = "N/A"
+    doi: Optional[str] = ""
+    url: Optional[str] = ""
+    source: Optional[str] = "Manual Entry"
+    citations_count: Optional[int] = 0
+    status: Optional[str] = "PENDING"
+    exclusion_reason: Optional[str] = None
+    id: Optional[str] = None
+
+class AddManualPaperRequest(BaseModel):
+    project_id: str = "default"
+    paper: ManualPaperItem
+
 
 
 

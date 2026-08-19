@@ -20,7 +20,9 @@ from .schemas import (
     CsvImportRequest,
     SelectionRuleCreate,
     BulkFetchAbstractsRequest,
-    UpdateAbstractRequest
+    UpdateAbstractRequest,
+    FetchMetadataRequest,
+    AddManualPaperRequest
 )
 from .database import Database
 from .crawlers import (
@@ -662,9 +664,6 @@ def update_manual_abstract(paper_id: str, req: UpdateAbstractRequest):
         "paper": updated
     }
 
-class FetchMetadataRequest(BaseModel):
-    identifier: str
-
 @app.post("/api/papers/fetch-metadata")
 def fetch_paper_metadata(req: FetchMetadataRequest):
     """
@@ -679,16 +678,12 @@ def fetch_paper_metadata(req: FetchMetadataRequest):
         logger.error(f"Error resolving metadata for '{req.identifier}': {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-class AddManualPaperRequest(BaseModel):
-    project_id: str = "default"
-    paper: Dict[str, Any]
-
 @app.post("/api/papers/manual")
 def add_manual_paper(req: AddManualPaperRequest):
     """
     Adds a paper manually to the SQLite database with duplicate detection.
     """
-    p = req.paper
+    p = req.paper.model_dump() if hasattr(req.paper, 'model_dump') else dict(req.paper)
     if not p.get("title") or not str(p.get("title")).strip():
         raise HTTPException(status_code=400, detail="Paper title is required.")
 
