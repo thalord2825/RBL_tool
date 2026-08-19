@@ -5,27 +5,27 @@ title RBL Research Tool - Master Launcher
 cd /d "%~dp0"
 
 echo =====================================================================
-echo       RBL RESEARCH INTELLIGENCE WEB APP - SELF-HEALING LAUNCHER      
+echo       RBL RESEARCH INTELLIGENCE WEB APP - MASTER LAUNCHER            
 echo =====================================================================
 echo.
 
-:: =====================================================================
-:: STAGE 1: PRE-FLIGHT ENVIRONMENT VERIFICATION
-:: =====================================================================
-echo [INFO] Stage 1/5: Checking system dependencies...
+:: -----------------------------------------------------------------------
+:: STAGE 1: ENVIRONMENT PRE-CHECK
+:: -----------------------------------------------------------------------
+echo [INFO] Stage 1/5: Checking Python and Node.js environment...
 
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Python is not installed or not found in system PATH.
-    echo Please download and install Python 3.10+ from: https://www.python.org/downloads/
+    echo [ERROR] Python is not found in system PATH.
+    echo Please install Python 3.10+ and add it to your PATH.
     pause
     exit /b 1
 )
 
 where node >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] Node.js is not installed or not found in system PATH.
-    echo Please download and install Node.js LTS from: https://nodejs.org/
+    echo [ERROR] Node.js is not found in system PATH.
+    echo Please install Node.js LTS from https://nodejs.org/
     pause
     exit /b 1
 )
@@ -37,90 +37,53 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [SUCCESS] Python and Node.js are available.
+echo [SUCCESS] System environment verified.
 echo.
 
-:: =====================================================================
-:: STAGE 2: SELF-HEALING PORT CLEANUP (PORTS 8000 & 5173/5174)
-:: =====================================================================
-echo [INFO] Stage 2/5: Scanning and cleaning conflicting ports (8000, 5173, 5174)...
+:: -----------------------------------------------------------------------
+:: STAGE 2: CLEAN CONFLICTING PORTS (8000, 5173, 5174)
+:: -----------------------------------------------------------------------
+echo [INFO] Stage 2/5: Cleaning up conflicting background ports...
 
-powershell -NoProfile -Command ^
-    "$ports = @(8000, 5173, 5174); " ^
-    "foreach ($port in $ports) { " ^
-    "    $pids = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique; " ^
-    "    foreach ($p in $pids) { " ^
-    "        if ($p -and $p -ne 0) { " ^
-    "            Write-Host '[HEALING] Terminating lingering PID' $p 'on port' $port; " ^
-    "            Stop-Process -Id $p -Force -ErrorAction SilentlyContinue; " ^
-    "        } " ^
-    "    } " ^
-    "}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ports = @(8000, 5173, 5174); foreach ($port in $ports) { $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue; if ($conns) { foreach ($c in $conns) { if ($c.OwningProcess -and $c.OwningProcess -ne 0) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue } } } }"
 
-echo [SUCCESS] Ports 8000 and 5173/5174 are clear and ready.
+echo [SUCCESS] Ports are cleared and ready.
 echo.
 
-:: =====================================================================
-:: STAGE 3: AUTOMATED DEPENDENCY SYNCHRONIZATION
-:: =====================================================================
-echo [INFO] Stage 3/5: Verifying backend and frontend dependencies...
+:: -----------------------------------------------------------------------
+:: STAGE 3: DEPENDENCY VERIFICATION
+:: -----------------------------------------------------------------------
+echo [INFO] Stage 3/5: Checking dependencies...
 
 if exist "backend\requirements.txt" (
-    echo [INFO] Checking Python packages...
     python -m pip install -r backend\requirements.txt --quiet --disable-pip-version-check
-    if %errorlevel% neq 0 (
-        echo [WARNING] Some pip dependencies failed to install. Continuing anyway...
-    )
 )
 
 if not exist "node_modules\" (
-    echo [INFO] Installing frontend packages (node_modules not found)...
+    echo [INFO] Installing frontend node_modules...
     call npm install --no-audit --silent
 ) else (
-    echo [SUCCESS] Frontend packages already installed.
+    echo [SUCCESS] Dependencies are ready.
 )
 echo.
 
-:: =====================================================================
-:: STAGE 4: RESILIENT DUAL-SERVICE ORCHESTRATION
-:: =====================================================================
-echo [INFO] Stage 4/5: Launching FastAPI Backend and Vite Frontend...
+:: -----------------------------------------------------------------------
+:: STAGE 4: LAUNCH BACKEND & FRONTEND SERVICES
+:: -----------------------------------------------------------------------
+echo [INFO] Stage 4/5: Starting FastAPI Backend and Vite Frontend...
 
-:: Start Backend in dedicated window
-start "RBL_Backend_Server" /min cmd /c "cd /d \"%~dp0backend\" && python run.py"
+start "RBL_Backend_Server" /min cmd /c "cd /d "%~dp0backend" && python run.py"
+start "RBL_Frontend_Server" /min cmd /c "cd /d "%~dp0" && npm run dev"
 
-:: Start Frontend in dedicated window
-start "RBL_Frontend_Server" /min cmd /c "cd /d \"%~dp0\" && npm run dev"
-
-echo [SUCCESS] Services spawned in background.
+echo [SUCCESS] Background servers spawned.
 echo.
 
-:: =====================================================================
-:: STAGE 5: ACTIVE HEALTH-CHECK POLLING & AUTO-BROWSER LAUNCH
-:: =====================================================================
-echo [INFO] Stage 5/5: Waiting for services to become healthy...
+:: -----------------------------------------------------------------------
+:: STAGE 5: WAIT FOR HEALTH & OPEN BROWSER
+:: -----------------------------------------------------------------------
+echo [INFO] Stage 5/5: Waiting for services to become online...
 
-powershell -NoProfile -Command ^
-    "$maxRetries = 30; $backendReady = $false; $frontendReady = $false; " ^
-    "for ($i = 1; $i -le $maxRetries; $i++) { " ^
-    "    Write-Host -NoNewline '.'; " ^
-    "    if (-not $backendReady) { " ^
-    "        try { $res = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/' -TimeoutSec 1 -UseBasicParsing; if ($res.StatusCode -eq 200) { $backendReady = $true } } catch {} " ^
-    "    } " ^
-    "    if (-not $frontendReady) { " ^
-    "        try { $res = Invoke-WebRequest -Uri 'http://localhost:5173/' -TimeoutSec 1 -UseBasicParsing; if ($res.StatusCode -eq 200) { $frontendReady = $true } } catch {} " ^
-    "    } " ^
-    "    if ($backendReady -and $frontendReady) { break; } " ^
-    "    Start-Sleep -Seconds 1; " ^
-    "} " ^
-    "Write-Host ''; " ^
-    "if ($backendReady -and $frontendReady) { " ^
-    "    Write-Host '[SUCCESS] All services are HEALTHY and ONLINE!' -ForegroundColor Green; " ^
-    "    exit 0; " ^
-    "} else { " ^
-    "    Write-Host '[WARNING] Timed out waiting for full health-check, opening browser anyway...' -ForegroundColor Yellow; " ^
-    "    exit 1; " ^
-    "}"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ready = $false; for ($i=1; $i -le 25; $i++) { Start-Sleep -Seconds 1; Write-Host -NoNewline '.'; try { $b = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/' -UseBasicParsing -TimeoutSec 1; $f = Invoke-WebRequest -Uri 'http://localhost:5173/' -UseBasicParsing -TimeoutSec 1; if ($b.StatusCode -eq 200 -and $f.StatusCode -eq 200) { $ready = $true; break; } } catch {} }; Write-Host ''; if ($ready) { Write-Host '[SUCCESS] All services are online and healthy!' -ForegroundColor Green } else { Write-Host '[INFO] Opening browser now...' -ForegroundColor Yellow }"
 
 echo.
 echo =====================================================================
@@ -128,11 +91,11 @@ echo   RBL RESEARCH TOOL IS LIVE: http://localhost:5173/
 echo   BACKEND API IS LIVE:       http://127.0.0.1:8000/
 echo =====================================================================
 echo.
-echo [INFO] Opening default browser...
+echo [INFO] Opening default browser at http://localhost:5173/ ...
 start http://localhost:5173/
 
 echo.
-echo [TIP] Keep this terminal open, or double-click 'stop_app.bat' when you wish to shut down.
-echo Press any key to close this launcher window (servers will remain running).
+echo [TIP] To stop all servers later, double-click 'stop_app.bat'.
+echo Press any key to close this launcher window.
 pause >nul
 exit /b 0
