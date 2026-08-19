@@ -90,4 +90,20 @@ class BulkDeletePapersRequest(BaseModel):
     paper_ids: List[str]
     project_id: str = "default"
 
+class CsvPaperImportItem(BaseModel):
+    title: str
+    authors: Optional[str] = "N/A"
+    year: Optional[int] = None
+    venue: Optional[str] = "N/A"
+    abstract: Optional[str] = ""
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    source: Optional[str] = "CSV Import"
+    citations_count: Optional[int] = 0
+
+class CsvImportRequest(BaseModel):
+    project_id: str = "default"
+    source_label: Optional[str] = "CSV Import"
+    papers: List[CsvPaperImportItem]
+
 

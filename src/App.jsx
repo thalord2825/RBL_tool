@@ -13,6 +13,7 @@ import GitCommitSettingsModal from './components/GitCommitSettingsModal';
 import ExportModal from './components/ExportModal';
 import ProtocolSettingsModal, { DEFAULT_PICO, DEFAULT_IC_LIST, DEFAULT_EC_LIST } from './components/ProtocolSettingsModal';
 import AiScreenMiniDock from './components/AiScreenMiniDock';
+import CsvImportModal from './components/CsvImportModal';
 
 import { apiClient } from './services/apiClient';
 
@@ -38,6 +39,7 @@ export default function App() {
   const [duplicatePair, setDuplicatePair] = useState(null); // { paperA, paperB }
   const [isGitSettingsOpen, setIsGitSettingsOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isCsvImportModalOpen, setIsCsvImportModalOpen] = useState(false);
 
   // Real-Time Streaming Progress
   const [harvestProgress, setHarvestProgress] = useState(null);
@@ -579,6 +581,7 @@ export default function App() {
         onOpenAiScreen={() => setIsAiScreenModalOpen(true)}
         onOpenAiProgressModal={() => setIsAiProgressModalOpen(true)}
         onOpenProtocolModal={() => setIsProtocolModalOpen(true)}
+        onOpenCsvImport={() => setIsCsvImportModalOpen(true)}
         onOpenGitSettings={() => setIsGitSettingsOpen(true)}
         onOpenExportModal={() => setIsExportModalOpen(true)}
         onRefreshCorpus={fetchPapers}
@@ -667,6 +670,20 @@ export default function App() {
         progress={aiProgress}
         onClose={() => setIsAiProgressModalOpen(false)}
         onMinimize={() => setIsAiProgressModalOpen(false)}
+      />
+
+      {/* CSV / BibTeX Paper Ingestion Modal */}
+      <CsvImportModal
+        isOpen={isCsvImportModalOpen}
+        onClose={() => setIsCsvImportModalOpen(false)}
+        onImportSuccess={(res) => {
+          if (res && res.papers) {
+            setPapers(res.papers);
+          } else {
+            fetchPapers();
+          }
+          addLog('SUCCESS', `CSV Ingestion: +${res.new_added || 0} unique papers added (${res.duplicates_filtered || 0} duplicates filtered).`);
+        }}
       />
 
       {/* Real-Time Multi-Source Harvest Progress Modal */}

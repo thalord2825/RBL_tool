@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, GitCommit, RefreshCw, Sparkles, AlertTriangle, ArrowRight, Sliders, Activity } from 'lucide-react';
+import { Download, GitCommit, RefreshCw, Sparkles, AlertTriangle, ArrowRight, Sliders, Activity, FileSpreadsheet } from 'lucide-react';
 
 export default function TopHeader({ 
   totalCount,
@@ -16,6 +16,7 @@ export default function TopHeader({
   onOpenAiScreen,
   onOpenAiProgressModal,
   onOpenProtocolModal,
+  onOpenCsvImport,
   onOpenGitSettings, 
   onOpenExportModal,
   onRefreshCorpus,
@@ -98,6 +99,16 @@ export default function TopHeader({
         >
           <Sliders className="w-3.5 h-3.5 text-[#D94E28]" />
           <span>Protocol ({icCount} IC / {ecCount} EC)</span>
+        </button>
+
+        {/* Import CSV Button */}
+        <button
+          onClick={onOpenCsvImport}
+          className="bg-[#24221F] hover:bg-[#33312E] text-[#38BDF8] hover:text-white border border-[#4A4843] hover:border-[#38BDF8] font-mono text-[11px] py-1.5 px-2.5 flex items-center gap-1.5 transition-colors font-bold shadow-2xs"
+          title="Import external literature from CSV or BibTeX files with auto-deduplication"
+        >
+          <FileSpreadsheet className="w-3.5 h-3.5 text-[#38BDF8]" />
+          <span>Import CSV</span>
         </button>
 
         {/* AI Auto-Screen Button */}

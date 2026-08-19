@@ -205,6 +205,16 @@ export const apiClient = {
     return res.data;
   },
 
+  // Import CSV Papers with Automated Server-side Deduplication
+  importCsvPapers: async ({ papers, sourceLabel = 'CSV Import', projectId = 'default' }) => {
+    const res = await api.post('/papers/import-csv', {
+      project_id: projectId,
+      source_label: sourceLabel,
+      papers,
+    });
+    return res.data;
+  },
+
   // Generate 6 RBL files
   exportFiles: async ({ authorName, searchQuery, sources, projectId = 'default' }) => {
     const res = await api.post('/export', {
@@ -260,3 +270,5 @@ export const apiClient = {
     return res.data;
   },
 };
+
+export default apiClient;

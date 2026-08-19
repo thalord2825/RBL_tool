@@ -15,7 +15,8 @@ from .schemas import (
     ExportRequest,
     ProtocolUpdateRequest,
     BulkUpdatePapersRequest,
-    BulkDeletePapersRequest
+    BulkDeletePapersRequest,
+    CsvImportRequest
 )
 from .database import Database
 from .crawlers import (
@@ -343,6 +344,48 @@ def merge_duplicates(req: MergeDuplicatesRequest, project_id: str = "default"):
         "status": "merged",
         "kept_paper": merged,
         "papers": flagged
+    }
+
+@app.post("/api/papers/import-csv")
+def import_csv_papers(req: CsvImportRequest):
+    """
+    Import papers from CSV with automated server-side deduplication and atomic SQLite ingestion.
+    """
+    raw_papers = []
+    for item in req.papers:
+        if not item.title or not item.title.strip():
+            continue
+        raw_papers.append({
+            "title": item.title.strip(),
+            "authors": item.authors or "N/A",
+            "year": item.year,
+            "venue": item.venue or "N/A",
+            "abstract": item.abstract or "",
+            "doi": item.doi if (item.doi and item.doi != "N/A") else None,
+            "url": item.url or (f"https://doi.org/{item.doi}" if item.doi else None),
+            "source": item.source or req.source_label or "CSV Import",
+            "citations_count": item.citations_count or 0,
+            "status": "PENDING"
+        })
+
+    if not raw_papers:
+        raise HTTPException(status_code=400, detail="No valid paper records with non-empty titles provided.")
+
+    existing_papers = Database.get_all_papers(req.project_id)
+    unique_new, duplicates_count = DeduplicationEngine.deduplicate(existing_papers, raw_papers)
+
+    if unique_new:
+        Database.save_papers(unique_new, project_id=req.project_id)
+
+    all_current_papers = Database.get_all_papers(req.project_id)
+    flagged_corpus = DeduplicationEngine.flag_corpus_duplicates(all_current_papers)
+
+    return {
+        "imported_count": len(raw_papers),
+        "duplicates_filtered": duplicates_count,
+        "new_added": len(unique_new),
+        "total_corpus": len(flagged_corpus),
+        "papers": flagged_corpus
     }
 
 @app.post("/api/export")

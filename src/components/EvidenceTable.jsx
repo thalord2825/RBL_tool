@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   CheckCircle2, 
   XCircle, 
@@ -23,7 +23,12 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  FileText
+  FileText,
+  Filter,
+  ArrowUpDown,
+  RotateCcw,
+  SlidersHorizontal,
+  Calendar
 } from 'lucide-react';
 import AiRationaleModal from './AiRationaleModal';
 
@@ -44,9 +49,14 @@ export default function EvidenceTable({
 }) {
   const [filterStage, setFilterStage] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedSource, setSelectedSource] = useState('ALL');
+  const [authorFilter, setAuthorFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('ALL');
+  const [sortBy, setSortBy] = useState('UNSCREENED_FIRST'); // 'UNSCREENED_FIRST' | 'NEWEST_HARVEST' | 'YEAR_DESC' | 'YEAR_ASC' | 'TITLE_AZ' | 'CITATIONS_DESC'
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
   const [selectedAbstractPaper, setSelectedAbstractPaper] = useState(null);
   const [selectedRationalePaper, setSelectedRationalePaper] = useState(null);
-  const [expandedAbstractIds, setExpandedAbstractIds] = useState(new Set());
   const [copiedDoiId, setCopiedDoiId] = useState(null);
 
   // Multi-Select State (External or Internal)
@@ -67,33 +77,113 @@ export default function EvidenceTable({
 
   const masterCheckboxRef = useRef(null);
 
-  // Filtered papers
-  const filteredPapers = papers.filter(paper => {
-    if (!paper) return false;
-    if (filterStage === 'INCLUDED' && paper.status !== 'INCLUDED') return false;
-    if (filterStage === 'PENDING' && paper.status !== 'PENDING') return false;
-    if (filterStage === 'EXCLUDED' && paper.status !== 'EXCLUDED') return false;
-    if (filterStage === 'UNSURE' && paper.ai_decision !== 'UNSURE') return false;
-    if (filterStage === 'DUPLICATES' && !paper.duplicate_flag) return false;
+  // Available unique Sources and Years computed from corpus
+  const availableSources = useMemo(() => {
+    const set = new Set();
+    papers.forEach(p => {
+      if (p && p.source) set.add(p.source);
+    });
+    return Array.from(set).sort();
+  }, [papers]);
 
-    if (searchTerm.trim()) {
-      const term = searchTerm.toLowerCase();
-      return (
-        paper.title?.toLowerCase().includes(term) ||
-        paper.authors?.toLowerCase().includes(term) ||
-        paper.venue?.toLowerCase().includes(term) ||
-        paper.abstract?.toLowerCase().includes(term) ||
-        paper.ai_rationale?.toLowerCase().includes(term) ||
-        paper.exclusion_reason?.toLowerCase().includes(term)
-      );
-    }
+  const availableYears = useMemo(() => {
+    const set = new Set();
+    papers.forEach(p => {
+      if (p && p.year) set.add(p.year);
+    });
+    return Array.from(set).sort((a, b) => b - a);
+  }, [papers]);
 
-    return true;
-  });
+  // Comprehensive Multi-Dimensional Filter & Smart Sorting
+  const filteredPapers = useMemo(() => {
+    let result = papers.filter(paper => {
+      if (!paper) return false;
+      if (filterStage === 'INCLUDED' && paper.status !== 'INCLUDED') return false;
+      if (filterStage === 'PENDING' && paper.status !== 'PENDING') return false;
+      if (filterStage === 'EXCLUDED' && paper.status !== 'EXCLUDED') return false;
+      if (filterStage === 'UNSURE' && paper.ai_decision !== 'UNSURE') return false;
+      if (filterStage === 'DUPLICATES' && !paper.duplicate_flag) return false;
+
+      // Source Filter
+      if (selectedSource !== 'ALL' && paper.source !== selectedSource) return false;
+
+      // Year Filter
+      if (yearFilter !== 'ALL' && String(paper.year) !== String(yearFilter)) return false;
+
+      // Author Filter
+      if (authorFilter.trim()) {
+        const aTerm = authorFilter.toLowerCase();
+        if (!paper.authors?.toLowerCase().includes(aTerm)) return false;
+      }
+
+      // Search Query Filter
+      if (searchTerm.trim()) {
+        const term = searchTerm.toLowerCase();
+        return (
+          paper.title?.toLowerCase().includes(term) ||
+          paper.authors?.toLowerCase().includes(term) ||
+          paper.venue?.toLowerCase().includes(term) ||
+          paper.abstract?.toLowerCase().includes(term) ||
+          paper.ai_rationale?.toLowerCase().includes(term) ||
+          paper.exclusion_reason?.toLowerCase().includes(term)
+        );
+      }
+
+      return true;
+    });
+
+    // Sorting Engine
+    result = [...result].sort((a, b) => {
+      if (sortBy === 'UNSCREENED_FIRST') {
+        // Priority 0: PENDING and no ai_decision
+        const aUnscreened = a.status === 'PENDING' && !a.ai_decision;
+        const bUnscreened = b.status === 'PENDING' && !b.ai_decision;
+        if (aUnscreened && !bUnscreened) return -1;
+        if (!aUnscreened && bUnscreened) return 1;
+        // Secondary: created_at descending or ID
+        return (b.created_at || '').localeCompare(a.created_at || '') || b.id.localeCompare(a.id);
+      }
+
+      if (sortBy === 'NEWEST_HARVEST') {
+        return (b.created_at || '').localeCompare(a.created_at || '') || b.id.localeCompare(a.id);
+      }
+
+      if (sortBy === 'YEAR_DESC') {
+        return (b.year || 0) - (a.year || 0);
+      }
+
+      if (sortBy === 'YEAR_ASC') {
+        return (a.year || 0) - (b.year || 0);
+      }
+
+      if (sortBy === 'TITLE_AZ') {
+        return (a.title || '').localeCompare(b.title || '');
+      }
+
+      if (sortBy === 'CITATIONS_DESC') {
+        return (b.citations_count || 0) - (a.citations_count || 0);
+      }
+
+      return 0;
+    });
+
+    return result;
+  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, sortBy]);
 
   const visibleIds = filteredPapers.map(p => p.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedPaperIds.has(id));
   const someVisibleSelected = visibleIds.some(id => selectedPaperIds.has(id));
+
+  // Count active non-default filters
+  const hasActiveFilters = selectedSource !== 'ALL' || authorFilter.trim() !== '' || yearFilter !== 'ALL' || searchTerm.trim() !== '' || sortBy !== 'UNSCREENED_FIRST';
+
+  const handleResetFilters = () => {
+    setSelectedSource('ALL');
+    setAuthorFilter('');
+    setYearFilter('ALL');
+    setSearchTerm('');
+    setSortBy('UNSCREENED_FIRST');
+  };
 
   // Notify parent of filter change
   useEffect(() => {
@@ -104,7 +194,7 @@ export default function EvidenceTable({
         filteredCount: visibleIds.length
       });
     }
-  }, [filterStage, searchTerm, papers.length]);
+  }, [filterStage, visibleIds.length, onFilterChange]);
 
   // Sync indeterminate state for master checkbox
   useEffect(() => {
@@ -165,17 +255,6 @@ export default function EvidenceTable({
     setLastSelectedIndex(index);
   };
 
-  // Toggle inline abstract drawer
-  const toggleAbstractExpand = (paperId) => {
-    const next = new Set(expandedAbstractIds);
-    if (next.has(paperId)) {
-      next.delete(paperId);
-    } else {
-      next.add(paperId);
-    }
-    setExpandedAbstractIds(next);
-  };
-
   // Copy DOI to clipboard
   const handleCopyDoi = (paperId, doi) => {
     if (!doi) return;
@@ -198,6 +277,8 @@ export default function EvidenceTable({
         return 'bg-[#DCFCE7] text-[#15803D] border-[#BBF7D0]';
       case 'google scholar':
         return 'bg-[#FFE4E6] text-[#9F1239] border-[#FECDD3]';
+      case 'csv import':
+        return 'bg-[#E2E8F0] text-[#334155] border-[#CBD5E1]';
       default:
         return 'bg-[#EDE9DF] text-[#1A1917] border-[#DCD6C5]';
     }
@@ -351,29 +432,190 @@ export default function EvidenceTable({
       {/* MAIN SCREENING TABLE CONTAINER */}
       <div className="flex-1 bg-[#F4F1EA] overflow-y-auto flex flex-col relative">
         
-        {/* Table Search & Actions Toolbar */}
-        <div className="p-2.5 bg-[#EFECE4] border-b border-[#DCD6C5] flex items-center justify-between gap-4 shrink-0">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#7A766F]" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search title, author, venue, abstract, AI rationale, EC reasons..."
-              className="w-full bg-[#F8F6F0] border border-[#C8C1AE] pl-8 pr-3 py-1.5 font-mono text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28]"
-            />
+        {/* MULTI-DIMENSIONAL TOOLBAR (SEARCH + SOURCE + SORT + ADVANCED) */}
+        <div className="p-2.5 bg-[#EFECE4] border-b border-[#DCD6C5] space-y-2 shrink-0">
+          
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            
+            {/* Primary Search Input */}
+            <div className="relative flex-1 min-w-[240px] max-w-md">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-[#7A766F]" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search title, author, venue, abstract, AI rationale, EC..."
+                className="w-full bg-[#F8F6F0] border border-[#C8C1AE] pl-8 pr-7 py-1.5 font-mono text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28] rounded"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-2 text-[#A09B8E] hover:text-[#1A1917]"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Source Filter Dropdown */}
+            <div className="flex items-center gap-1.5 font-mono text-xs">
+              <span className="text-[#7A766F] text-[11px] font-bold">Source:</span>
+              <select
+                value={selectedSource}
+                onChange={(e) => setSelectedSource(e.target.value)}
+                className="bg-[#F8F6F0] border border-[#C8C1AE] px-2 py-1.5 text-xs text-[#1A1917] rounded focus:outline-none focus:border-[#D94E28] cursor-pointer"
+              >
+                <option value="ALL">All Sources ({papers.length})</option>
+                {availableSources.map((src, i) => {
+                  const count = papers.filter(p => p.source === src).length;
+                  return (
+                    <option key={i} value={src}>
+                      {src} ({count})
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+
+            {/* Smart Sort Dropdown */}
+            <div className="flex items-center gap-1.5 font-mono text-xs">
+              <span className="text-[#7A766F] text-[11px] font-bold flex items-center gap-1">
+                <ArrowUpDown className="w-3 h-3 text-[#D94E28]" />
+                <span>Sort:</span>
+              </span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="bg-[#F8F6F0] border border-[#C8C1AE] px-2 py-1.5 text-xs text-[#1A1917] rounded focus:outline-none focus:border-[#D94E28] cursor-pointer font-bold"
+              >
+                <option value="UNSCREENED_FIRST">⚡ Unscreened First (Default)</option>
+                <option value="NEWEST_HARVEST">🕒 Newest Harvested / Added</option>
+                <option value="YEAR_DESC">📅 Year (Newest → Oldest)</option>
+                <option value="YEAR_ASC">📅 Year (Oldest → Newest)</option>
+                <option value="TITLE_AZ">🔤 Title (A → Z)</option>
+                <option value="CITATIONS_DESC">📊 Citations (High → Low)</option>
+              </select>
+            </div>
+
+            {/* Toggle Advanced Filters Button */}
+            <button
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className={`px-2.5 py-1.5 font-mono text-xs font-bold rounded border flex items-center gap-1.5 transition-colors ${
+                showAdvancedFilters || authorFilter || yearFilter !== 'ALL'
+                  ? 'bg-[#1A1917] text-white border-[#1A1917]'
+                  : 'bg-[#F8F6F0] text-[#55524B] border-[#C8C1AE] hover:bg-[#EDE9DF]'
+              }`}
+            >
+              <SlidersHorizontal className="w-3 h-3" />
+              <span>More Filters</span>
+              {(authorFilter || yearFilter !== 'ALL') && (
+                <span className="bg-[#D94E28] text-white text-[9px] px-1 rounded-full font-bold">!</span>
+              )}
+            </button>
+
+            {/* Corpus Count Badge */}
+            <div className="flex items-center gap-3 font-mono text-xs text-[#7A766F] ml-auto">
+              {selectedPaperIds.size > 0 && (
+                <span className="bg-[#FEF3C7] text-[#B8860B] border border-[#FDE68A] px-2 py-0.5 font-bold text-[11px] rounded">
+                  {selectedPaperIds.size} Selected
+                </span>
+              )}
+              <span>
+                Showing <strong className="text-[#1A1917]">{filteredPapers.length}</strong> of {papers.length}
+              </span>
+            </div>
+
           </div>
 
-          <div className="flex items-center gap-3 font-mono text-xs text-[#7A766F]">
-            {selectedPaperIds.size > 0 && (
-              <span className="bg-[#FEF3C7] text-[#B8860B] border border-[#FDE68A] px-2 py-0.5 font-bold text-[11px]">
-                {selectedPaperIds.size} Selected
-              </span>
-            )}
-            <span>
-              Showing <strong className="text-[#1A1917]">{filteredPapers.length}</strong> of {papers.length} records
-            </span>
-          </div>
+          {/* ADVANCED FILTER DRAWER (AUTHOR & YEAR) */}
+          {showAdvancedFilters && (
+            <div className="bg-[#F8F6F0] p-2.5 border border-[#DCD6C5] rounded flex items-center gap-4 flex-wrap text-xs font-mono animate-in fade-in duration-150">
+              
+              {/* Author Quick Search */}
+              <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                <Users className="w-3.5 h-3.5 text-[#7A766F] shrink-0" />
+                <span className="font-bold text-[#1A1917] text-[11px] shrink-0">Filter Author:</span>
+                <input
+                  type="text"
+                  value={authorFilter}
+                  onChange={(e) => setAuthorFilter(e.target.value)}
+                  placeholder="e.g. Alan Turing, Nguyen..."
+                  className="w-full bg-white border border-[#C8C1AE] px-2 py-1 text-xs text-[#1A1917] rounded focus:outline-none focus:border-[#D94E28]"
+                />
+              </div>
+
+              {/* Year Select Filter */}
+              <div className="flex items-center gap-2">
+                <Calendar className="w-3.5 h-3.5 text-[#7A766F] shrink-0" />
+                <span className="font-bold text-[#1A1917] text-[11px] shrink-0">Year:</span>
+                <select
+                  value={yearFilter}
+                  onChange={(e) => setYearFilter(e.target.value)}
+                  className="bg-white border border-[#C8C1AE] px-2 py-1 text-xs text-[#1A1917] rounded focus:outline-none focus:border-[#D94E28] cursor-pointer"
+                >
+                  <option value="ALL">All Years</option>
+                  {availableYears.map((yr, i) => (
+                    <option key={i} value={yr}>
+                      {yr}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+            </div>
+          )}
+
+          {/* ACTIVE FILTER PILLS STRIP */}
+          {hasActiveFilters && (
+            <div className="flex items-center gap-2 flex-wrap pt-0.5 font-mono text-[10px]">
+              <span className="text-[#7A766F] font-bold">Active Filters:</span>
+
+              {selectedSource !== 'ALL' && (
+                <span className="bg-[#E0F2FE] text-[#0369A1] border border-[#BAE6FD] px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <span>Source: {selectedSource}</span>
+                  <button onClick={() => setSelectedSource('ALL')} className="hover:text-[#0C4A6E]">✕</button>
+                </span>
+              )}
+
+              {authorFilter.trim() && (
+                <span className="bg-[#F3E8FF] text-[#6B21A8] border border-[#E9D8FD] px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <span>Author: "{authorFilter}"</span>
+                  <button onClick={() => setAuthorFilter('')} className="hover:text-[#4C1D95]">✕</button>
+                </span>
+              )}
+
+              {yearFilter !== 'ALL' && (
+                <span className="bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A] px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <span>Year: {yearFilter}</span>
+                  <button onClick={() => setYearFilter('ALL')} className="hover:text-[#78350F]">✕</button>
+                </span>
+              )}
+
+              {searchTerm.trim() && (
+                <span className="bg-[#EDE9DF] text-[#1A1917] border border-[#DCD6C5] px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <span>Query: "{searchTerm}"</span>
+                  <button onClick={() => setSearchTerm('')} className="hover:text-[#D94E28]">✕</button>
+                </span>
+              )}
+
+              {sortBy !== 'UNSCREENED_FIRST' && (
+                <span className="bg-[#F4F1EA] text-[#4A4843] border border-[#DCD6C5] px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <span>Sort: {sortBy}</span>
+                  <button onClick={() => setSortBy('UNSCREENED_FIRST')} className="hover:text-[#D94E28]">✕</button>
+                </span>
+              )}
+
+              <button
+                onClick={handleResetFilters}
+                className="text-[#D94E28] hover:underline font-bold flex items-center gap-0.5 ml-1"
+                title="Reset all filters and sorting to default"
+              >
+                <RotateCcw className="w-2.5 h-2.5" />
+                <span>Clear All</span>
+              </button>
+            </div>
+          )}
+
         </div>
 
         {/* Fixed Width Proportional Table Matrix with 4-Tier Metadata */}
@@ -408,7 +650,6 @@ export default function EvidenceTable({
                 const isExcluded = paper.status === 'EXCLUDED';
                 const isExtracted = isIncluded && paper.tool_model && paper.tool_model !== 'N/A';
                 const confidence = Math.round((paper.ai_confidence || 0.85) * 100);
-                const isAbstractExpanded = expandedAbstractIds.has(paper.id);
 
                 return (
                   <tr 
@@ -465,11 +706,11 @@ export default function EvidenceTable({
                         {paper.ai_decision && (
                           <div 
                             onClick={() => setSelectedRationalePaper(paper)}
-                            className="border border-[#C8C1AE] bg-[#FDFCF9] hover:bg-[#F4F1EA] hover:border-[#D94E28] p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group"
+                            className="border border-[#C8C1AE] bg-[#FDFCF9] hover:bg-[#F4F1EA] hover:border-[#D94E28] p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded"
                             title="Click to view full AI scientific rationale & criteria details"
                           >
                             <div className="flex items-center justify-between gap-1">
-                              <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border ${
+                              <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border rounded ${
                                 paper.ai_decision === 'INCLUDED'
                                   ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
                                   : paper.ai_decision === 'EXCLUDED'
@@ -497,7 +738,7 @@ export default function EvidenceTable({
                         {paper.duplicate_flag && (
                           <button
                             onClick={() => onOpenDuplicateCompare(paper, paper.duplicate_with_id)}
-                            className="w-full bg-[#FEF3C7] border border-[#FDE68A] text-[#B8860B] p-1 font-mono text-[9px] font-bold flex items-center justify-between hover:bg-[#FDE68A] transition-colors"
+                            className="w-full bg-[#FEF3C7] border border-[#FDE68A] text-[#B8860B] p-1 font-mono text-[9px] font-bold flex items-center justify-between hover:bg-[#FDE68A] transition-colors rounded"
                           >
                             <span className="flex items-center gap-1 truncate">
                               <AlertTriangle className="w-3 h-3 shrink-0 text-[#D97706]" />
@@ -514,7 +755,7 @@ export default function EvidenceTable({
                     <td className="py-3 px-4">
                       <div className="space-y-1.5">
                         
-                        {/* Tier 1: Title & Canonical Link (Large, Modern Academic Font) */}
+                        {/* Tier 1: Title & Canonical Link (Large Modern Academic Font) */}
                         <div className="flex items-start justify-between gap-2">
                           <div className="font-sans text-[16.5px] font-bold text-[#111827] leading-snug tracking-tight">
                             {paper.url ? (
@@ -535,7 +776,7 @@ export default function EvidenceTable({
 
                         {/* Tier 2: Authors Line (Subtle Secondary Attribution) */}
                         {paper.authors && (
-                          <div className="font-sans text-[11px] text-[#666259] flex items-center gap-1.5">
+                          <div className="font-sans text-[11.5px] text-[#666259] flex items-center gap-1.5">
                             <Users className="w-3 h-3 text-[#A09B8E] shrink-0" />
                             <span className="truncate max-w-xl" title={paper.authors}>
                               {paper.authors}
@@ -574,7 +815,7 @@ export default function EvidenceTable({
                           {paper.doi && paper.doi !== 'N/A' && (
                             <button
                               onClick={() => handleCopyDoi(paper.id, paper.doi)}
-                              className="bg-[#F4F1EA] hover:bg-[#EDE9DF] text-[#55524C] hover:text-[#1A1917] border border-[#DCD6C5] px-1.5 py-0.5 rounded flex items-center gap-1 transition-colors"
+                              className="bg-[#F4F1EA] hover:bg-[#EDE9DF] text-[#55524C] hover:text-[#1A1917] border border-[#DCD6C5] px-1.5 py-0.5 rounded flex items-center gap-1 transition-colors cursor-pointer"
                               title="Click to copy DOI link"
                             >
                               <span>DOI: {paper.doi.length > 22 ? `${paper.doi.slice(0, 20)}...` : paper.doi}</span>
@@ -624,7 +865,7 @@ export default function EvidenceTable({
                         <div className="space-y-1">
                           <button
                             onClick={() => onOpenExtraction(paper)}
-                            className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs ${
+                            className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded ${
                               isExtracted
                                 ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5] hover:bg-[#C2E4C9]'
                                 : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A] hover:bg-[#FDE68A]'
@@ -663,7 +904,7 @@ export default function EvidenceTable({
               {filteredPapers.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-12 text-center font-mono text-xs text-[#7A766F]">
-                    No papers in corpus matching this filter. Click <strong>"Harvest Metadata"</strong> above to discover literature.
+                    No papers in corpus matching current filters. Try resetting filters or click <strong>"Harvest Metadata"</strong> above.
                   </td>
                 </tr>
               )}
