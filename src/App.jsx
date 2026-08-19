@@ -15,7 +15,7 @@ import ProtocolSettingsModal, { DEFAULT_PICO, DEFAULT_IC_LIST, DEFAULT_EC_LIST }
 import AiScreenMiniDock from './components/AiScreenMiniDock';
 import CsvImportModal from './components/CsvImportModal';
 
-import { apiClient } from './services/apiClient';
+import { apiClient, getStoredGeminiApiKey } from './services/apiClient';
 
 export default function App() {
   // Corpus & Search State
@@ -220,7 +220,7 @@ export default function App() {
         projectId: 'default',
         autoScreen: withAiScreen,
         researchContext,
-        apiKey: localStorage.getItem('gemini_api_key') || null,
+        apiKey: getStoredGeminiApiKey() || null,
         modelName: autoScreenModel,
         discardExcluded: discardExcludedOnHarvest,
         onEvent: (eventData) => {

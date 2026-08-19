@@ -15,6 +15,8 @@ import {
   Sliders
 } from 'lucide-react';
 
+import { getStoredGeminiApiKey, setStoredGeminiApiKey } from '../services/apiClient';
+
 export default function AiScreenModal({
   isOpen,
   onClose,
@@ -30,7 +32,7 @@ export default function AiScreenModal({
   filteredPaperIds = [],
   currentFilterStage = 'ALL'
 }) {
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('rbl_gemini_key') || '');
+  const [apiKey, setApiKey] = useState(() => getStoredGeminiApiKey());
   const [modelName, setModelName] = useState(() => {
     const saved = localStorage.getItem('rbl_gemini_model');
     if (saved && (saved.includes('1.5') || saved.includes('2.0') || saved === 'models/gemini-pro')) {
@@ -92,7 +94,7 @@ export default function AiScreenModal({
       return;
     }
 
-    localStorage.setItem('rbl_gemini_key', apiKey.trim());
+    setStoredGeminiApiKey(apiKey.trim());
     localStorage.setItem('rbl_gemini_model', modelName);
 
     let resolvedPaperIds = null;
