@@ -154,6 +154,10 @@ class AddManualPaperRequest(BaseModel):
     project_id: str = "default"
     paper: ManualPaperItem
 
+ManualPaperItem.model_rebuild()
+AddManualPaperRequest.model_rebuild()
+FetchMetadataRequest.model_rebuild()
+
 
 
 
