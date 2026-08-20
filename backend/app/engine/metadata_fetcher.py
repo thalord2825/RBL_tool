@@ -1,10 +1,16 @@
 import re
+import io
 import json
 import logging
 import requests
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 from typing import Dict, Any, Optional
+
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +99,159 @@ class MetadataFetcher:
             title = re.sub(r'[_\-]+', ' ', title).strip()
             if len(title.split()) >= 3:
                 return title
+
+        return None
+
+    @classmethod
+    def canonicalize_pdf_url(cls, url: str) -> Optional[str]:
+        """
+        Maps known academic repository PDF links to their rich HTML metadata landing pages.
+        """
+        if not url:
+            return None
+        u = url.strip()
+
+        # 1. ACL Anthology PDF: https://aclanthology.org/2023.emnlp-main.315.pdf -> https://aclanthology.org/2023.emnlp-main.315
+        m_acl = re.match(r'^(https?://aclanthology\.org/[^/]+?)\.pdf$', u, re.I)
+        if m_acl:
+            return m_acl.group(1)
+
+        # 2. arXiv PDF: https://arxiv.org/pdf/2303.08774.pdf -> https://arxiv.org/abs/2303.08774
+        m_arxiv = re.search(r'arxiv\.org/pdf/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?|[a-z\-]+/[0-9]{7})(?:\.pdf)?', u, re.I)
+        if m_arxiv:
+            return f"https://arxiv.org/abs/{m_arxiv.group(1)}"
+
+        # 3. OpenReview PDF: https://openreview.net/pdf?id=xxx -> https://openreview.net/forum?id=xxx
+        m_openrev = re.search(r'openreview\.net/pdf\?id=([a-zA-Z0-9_\-]+)', u, re.I)
+        if m_openrev:
+            return f"https://openreview.net/forum?id={m_openrev.group(1)}"
+
+        # 4. BioRxiv / MedRxiv PDF
+        m_biorxiv = re.match(r'^(https?://www\.(?:biorxiv|medrxiv)\.org/content/.+?)(?:\.full)?\.pdf$', u, re.I)
+        if m_biorxiv:
+            return m_biorxiv.group(1)
+
+        # 5. ResearchGate Download PDF
+        m_rg = re.match(r'^(https?://www\.researchgate\.net/publication/[0-9]+_[^/?#]+)(?:/download|\.pdf)', u, re.I)
+        if m_rg:
+            return m_rg.group(1)
+
+        # 6. Semantic Scholar PDF
+        m_s2 = re.match(r'^(https?://www\.semanticscholar\.org/paper/[^/?#]+/[a-f0-9]+)\.pdf$', u, re.I)
+        if m_s2:
+            return m_s2.group(1)
+
+        # 7. SSRN Delivery PDF
+        m_ssrn = re.search(r'papers\.ssrn\.com/.*?abstractid=([0-9]+)', u, re.I)
+        if m_ssrn:
+            return f"https://papers.ssrn.com/sol3/papers.cfm?abstract_id={m_ssrn.group(1)}"
+
+        # 8. IEEE Xplore stamp
+        m_ieee = re.search(r'ieeexplore\.ieee\.org/stamp/stamp\.jsp\?.*?arnumber=([0-9]+)', u, re.I)
+        if m_ieee:
+            return f"https://ieeexplore.ieee.org/document/{m_ieee.group(1)}"
+
+        return None
+
+    @classmethod
+    def fetch_by_pdf_stream(cls, pdf_url: str) -> Optional[Dict[str, Any]]:
+        """
+        Streams a raw PDF document over HTTP, parses the first page text and metadata dictionary,
+        discovers embedded DOIs / arXiv IDs or titles, and resolves full canonical metadata.
+        """
+        if not pypdf:
+            return None
+
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            res = requests.get(pdf_url, headers=headers, timeout=14, stream=True)
+            if res.status_code != 200:
+                return None
+
+            # Download up to 3MB to parse first pages safely
+            content = res.raw.read(3 * 1024 * 1024)
+            if not content.startswith(b"%PDF"):
+                return None
+
+            reader = pypdf.PdfReader(io.BytesIO(content))
+            if not reader.pages:
+                return None
+
+            # 1. Extract embedded PDF document info
+            pdf_meta = reader.metadata or {}
+            embedded_title = str(pdf_meta.get("/Title", "") or "").strip()
+            embedded_author = str(pdf_meta.get("/Author", "") or "").strip()
+
+            # 2. Extract page 1 text
+            page1_text = reader.pages[0].extract_text() or ""
+
+            # 3. Check for DOI inside page text
+            doi_match = cls.extract_doi(page1_text)
+            if doi_match:
+                logger.info(f"Found DOI inside PDF first page: {doi_match}")
+                doi_res = cls.fetch_by_doi(doi_match)
+                if doi_res and doi_res.get("title"):
+                    doi_res["url"] = pdf_url
+                    doi_res["source"] = f"PDF Stream (DOI: {doi_match})"
+                    return doi_res
+
+            # 4. Check for arXiv ID inside page text
+            arxiv_match = cls.extract_arxiv_id(page1_text)
+            if arxiv_match:
+                logger.info(f"Found arXiv ID inside PDF first page: {arxiv_match}")
+                arxiv_res = cls.fetch_by_arxiv(arxiv_match)
+                if arxiv_res and arxiv_res.get("title"):
+                    arxiv_res["url"] = pdf_url
+                    arxiv_res["source"] = f"PDF Stream (arXiv: {arxiv_match})"
+                    return arxiv_res
+
+            # 5. Extract Abstract section from Page 1 text
+            abstract_text = ""
+            m_abs = re.search(r'\bAbstract\s*[:\-—]?\s*(.*?)(?=\n\s*(?:(?:1|I)[\.\s]|Introduction|Keywords|Index Terms|Key words))', page1_text, re.DOTALL | re.IGNORECASE)
+            if m_abs:
+                abstract_text = cls.clean_html_tags(m_abs.group(1))
+
+            # 6. Extract Candidate Title from text or metadata
+            candidate_title = embedded_title
+            if not candidate_title or candidate_title.lower().endswith('.pdf') or len(candidate_title) < 5:
+                # Extract first bold/distinctive lines before authors/abstract
+                lines = [ln.strip() for ln in page1_text.split('\n') if ln.strip() and len(ln.strip()) > 3]
+                filtered_lines = []
+                for ln in lines[:8]:
+                    if not any(h in ln.lower() for h in ['proceedings of', 'copyright', 'isbn', 'issn', 'http', 'vol.', 'no.', 'pages']):
+                        filtered_lines.append(ln)
+                if filtered_lines:
+                    candidate_title = filtered_lines[0]
+                    if len(filtered_lines) > 1 and len(filtered_lines[0].split()) < 5:
+                        candidate_title += " " + filtered_lines[1]
+
+            # 7. Search OpenAlex with extracted title for enriched metadata
+            if candidate_title and len(candidate_title.split()) >= 3:
+                oa_res = cls.fetch_by_title_query(candidate_title)
+                if oa_res and oa_res.get("title"):
+                    if not oa_res.get("abstract") or oa_res["abstract"] == "N/A":
+                        oa_res["abstract"] = abstract_text or "N/A"
+                    oa_res["url"] = pdf_url
+                    oa_res["source"] = "PDF Stream (via OpenAlex Search)"
+                    return oa_res
+
+            # 8. Fallback to direct PDF page 1 extraction
+            if candidate_title or abstract_text:
+                return {
+                    "title": candidate_title or "Untitled PDF Document",
+                    "authors": embedded_author or "",
+                    "year": 2024,
+                    "venue": "",
+                    "abstract": abstract_text or "N/A",
+                    "doi": "",
+                    "url": pdf_url,
+                    "source": "PDF Stream Ingestion",
+                    "citations_count": 0
+                }
+        except Exception as e:
+            logger.warning(f"Direct PDF stream ingestion error for {pdf_url}: {e}")
 
         return None
 
@@ -606,10 +765,19 @@ class MetadataFetcher:
     @classmethod
     def resolve_identifier(cls, raw_input: str) -> Dict[str, Any]:
         """
-        Universal entry point: auto-detects DOI, ArXiv, or generic URL and fetches canonical metadata.
+        Universal entry point: auto-detects DOI, ArXiv, PDF URLs, academic links, or titles and fetches canonical metadata.
         """
         inp = raw_input.strip()
         
+        # 0. Canonicalize academic PDF URLs (e.g. aclanthology.org/2023.emnlp-main.315.pdf -> aclanthology.org/2023.emnlp-main.315)
+        canon_url = cls.canonicalize_pdf_url(inp)
+        if canon_url and canon_url != inp:
+            logger.info(f"Canonicalized PDF URL: {inp} -> {canon_url}")
+            res = cls.resolve_identifier(canon_url)
+            if res and res.get("title") and res.get("title") != canon_url:
+                res["url"] = inp # Preserve original user input URL
+                return res
+
         # 1. Check for DOI URL or DOI string (e.g. 10.1145/... or https://doi.org/10.1145/...)
         extracted_doi = cls.extract_doi(inp)
         if extracted_doi and ("doi.org" in inp.lower() or inp.lower().startswith("10.") or "doi:" in inp.lower()):
@@ -622,23 +790,37 @@ class MetadataFetcher:
             logger.info(f"Resolving as ArXiv: {extracted_arxiv}")
             return cls.fetch_by_arxiv(extracted_arxiv)
 
-        # 3. If standard URL (ResearchGate, IEEE, ScienceDirect, Springer, etc.), scrape HTML metadata & OpenAlex
+        # 3. Direct PDF Document stream parsing (if ends in .pdf or looks like direct PDF document)
+        if (inp.startswith("http://") or inp.startswith("https://")) and inp.lower().split('?')[0].endswith('.pdf'):
+            logger.info(f"Resolving as direct PDF stream: {inp}")
+            pdf_res = cls.fetch_by_pdf_stream(inp)
+            if pdf_res and pdf_res.get("title") and pdf_res.get("title") != "Untitled PDF Document":
+                return pdf_res
+
+        # 4. If standard URL (ResearchGate, IEEE, ScienceDirect, Springer, etc.), scrape HTML metadata & OpenAlex
         if inp.startswith("http://") or inp.startswith("https://"):
             logger.info(f"Resolving as academic URL: {inp}")
-            return cls.scrape_html_metadata(inp)
+            html_res = cls.scrape_html_metadata(inp)
+            if html_res and html_res.get("title") and html_res["title"] != inp:
+                return html_res
+            # If HTML scraping yielded empty title, try direct PDF stream as backup
+            pdf_res = cls.fetch_by_pdf_stream(inp)
+            if pdf_res and pdf_res.get("title") and pdf_res.get("title") != "Untitled PDF Document":
+                return pdf_res
+            return html_res
 
-        # 4. If plain text DOI without protocol (e.g. 10.3844/jcssp.2025...)
+        # 5. If plain text DOI without protocol (e.g. 10.3844/jcssp.2025...)
         if extracted_doi:
             logger.info(f"Resolving as raw DOI: {extracted_doi}")
             return cls.fetch_by_doi(extracted_doi)
 
-        # 5. If pure text title, try OpenAlex Title Search
+        # 6. If pure text title, try OpenAlex Title Search
         if len(inp.split()) >= 3:
             oa_res = cls.fetch_by_title_query(inp)
             if oa_res:
                 return oa_res
 
-        # 6. Fallback default
+        # 7. Fallback default
         return {
             "title": inp,
             "authors": "",
