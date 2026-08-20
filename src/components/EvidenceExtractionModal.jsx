@@ -1,5 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { X, Save, FileText, ExternalLink, Sparkles, Loader2, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  X, 
+  Save, 
+  FileText, 
+  ExternalLink, 
+  Sparkles, 
+  Loader2, 
+  RotateCcw, 
+  AlertCircle, 
+  CheckCircle2,
+  Terminal,
+  ChevronDown,
+  ChevronUp,
+  Square,
+  Zap,
+  Activity
+} from 'lucide-react';
 import apiClient, { getStoredGeminiApiKey } from '../services/apiClient';
 
 export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSaveExtraction, addToast }) {
@@ -18,6 +34,19 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
   const [extractError, setExtractError] = useState(null);
   const [extractSuccess, setExtractSuccess] = useState(null);
 
+  // Streaming Progress & Diagnostic Logs State
+  const [streamProgress, setStreamProgress] = useState({ percent: 0, message: '', step: 0, total: 4 });
+  const [extractionLogs, setExtractionLogs] = useState([]);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const abortControllerRef = useRef(null);
+  const logsEndRef = useRef(null);
+
+  useEffect(() => {
+    if (logsEndRef.current && showTerminal) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [extractionLogs, showTerminal]);
+
   useEffect(() => {
     if (paper) {
       setFormData({
@@ -33,7 +62,16 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
       setExtractSuccess(null);
       setIsExtracting(false);
       setIsSaving(false);
+      setStreamProgress({ percent: 0, message: '', step: 0, total: 4 });
+      setExtractionLogs([]);
+      setShowTerminal(false);
     }
+
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
   }, [paper, isOpen]);
 
   if (!isOpen || !paper) return null;
@@ -55,6 +93,17 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
     setExtractSuccess('Reset all fields to "N/A" according to Zero Fabrication Policy.');
   };
 
+  const handleAbort = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsExtracting(false);
+      setExtractionLogs(prev => [
+        ...prev,
+        { time: new Date().toLocaleTimeString(), text: '⛔ Extraction aborted by user.', type: 'warn' }
+      ]);
+    }
+  };
+
   const handleAiExtract = async () => {
     if (!paper.abstract || paper.abstract.trim() === '' || paper.abstract === 'N/A') {
       setExtractError('Abstract is missing or "N/A". Please fetch or write the abstract before running AI extraction.');
@@ -64,10 +113,17 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
     setIsExtracting(true);
     setExtractError(null);
     setExtractSuccess(null);
+    setShowTerminal(true);
+    setStreamProgress({ percent: 10, message: 'Initiating streaming connection...', step: 1, total: 4 });
+    setExtractionLogs([
+      { time: new Date().toLocaleTimeString(), text: `🚀 Starting AI Empirical Extraction for [${paper.id || 'Paper'}]...`, type: 'info' }
+    ]);
+
+    abortControllerRef.current = new AbortController();
 
     try {
       const apiKey = getStoredGeminiApiKey();
-      const res = await apiClient.extractEvidence({
+      await apiClient.streamExtractEvidence({
         paperId: paper.id,
         title: paper.title,
         abstract: paper.abstract,
@@ -75,40 +131,87 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
         year: paper.year,
         venue: paper.venue,
         apiKey,
-      });
+        signal: abortControllerRef.current.signal,
+        onEvent: (eventData) => {
+          const nowStr = new Date().toLocaleTimeString();
 
-      if (res && res.status === 'success' && res.evidence) {
-        setFormData({
-          tool_model: res.evidence.tool_model || 'N/A',
-          dataset_name: res.evidence.dataset_name || 'N/A',
-          sample_size_n: res.evidence.sample_size_n || 'N/A',
-          metrics_evaluated: res.evidence.metrics_evaluated || 'N/A',
-          empirical_results: res.evidence.empirical_results || 'N/A',
-          code_url: res.evidence.code_url || 'N/A',
-          limitations: res.evidence.limitations || 'N/A',
-        });
-        const modelUsed = res.evidence.extracted_by_model || 'Gemini';
-        setExtractSuccess(`Evidence successfully extracted via ${modelUsed}! Review numbers before saving.`);
-        if (addToast) {
-          addToast({
-            type: 'success',
-            title: 'Evidence Auto-Extracted',
-            message: `Synthesized 7-column evidence matrix for [${paper.id || 'Paper'}] using ${modelUsed}.`
-          });
+          if (eventData.event === 'step') {
+            setStreamProgress({
+              percent: eventData.percent || 0,
+              message: eventData.message || '',
+              step: eventData.step || 1,
+              total: eventData.total || 4
+            });
+            if (eventData.log) {
+              setExtractionLogs(prev => [...prev, { time: nowStr, text: eventData.log, type: 'info' }]);
+            }
+          } else if (eventData.event === 'fallback') {
+            if (eventData.log) {
+              setExtractionLogs(prev => [...prev, { time: nowStr, text: eventData.log, type: 'warn' }]);
+            }
+          } else if (eventData.event === 'log') {
+            if (eventData.log) {
+              setExtractionLogs(prev => [...prev, { time: nowStr, text: eventData.log, type: 'info' }]);
+            }
+          } else if (eventData.event === 'complete') {
+            setStreamProgress({
+              percent: 100,
+              message: eventData.message || 'Complete!',
+              step: 4,
+              total: 4
+            });
+
+            if (eventData.evidence) {
+              setFormData({
+                tool_model: eventData.evidence.tool_model || 'N/A',
+                dataset_name: eventData.evidence.dataset_name || 'N/A',
+                sample_size_n: eventData.evidence.sample_size_n || 'N/A',
+                metrics_evaluated: eventData.evidence.metrics_evaluated || 'N/A',
+                empirical_results: eventData.evidence.empirical_results || 'N/A',
+                code_url: eventData.evidence.code_url || 'N/A',
+                limitations: eventData.evidence.limitations || 'N/A',
+              });
+            }
+
+            const modelUsed = eventData.model || 'Gemini';
+            const dur = eventData.duration_ms || 0;
+            setExtractSuccess(`Evidence successfully extracted via ${modelUsed} (${dur}ms)! Please review before saving.`);
+            setExtractionLogs(prev => [
+              ...prev, 
+              { time: nowStr, text: eventData.log || `✓ Extraction complete in ${dur}ms!`, type: 'success' }
+            ]);
+
+            if (addToast) {
+              addToast({
+                type: 'success',
+                title: 'Evidence Auto-Extracted',
+                message: `Synthesized 7-column evidence matrix for [${paper.id || 'Paper'}] using ${modelUsed} (${dur}ms).`
+              });
+            }
+            setIsExtracting(false);
+          } else if (eventData.event === 'error') {
+            setExtractError(eventData.message || 'AI extraction failed.');
+            setExtractionLogs(prev => [...prev, { time: nowStr, text: `✕ Error: ${eventData.message}`, type: 'error' }]);
+            setIsExtracting(false);
+          }
+        },
+        onError: (err) => {
+          setExtractError(err.message || 'Streaming extraction connection failure.');
+          setExtractionLogs(prev => [
+            ...prev, 
+            { time: new Date().toLocaleTimeString(), text: `✕ Stream Error: ${err.message}`, type: 'error' }
+          ]);
+          setIsExtracting(false);
         }
-      } else {
-        setExtractError('AI extraction returned empty response. You can continue with manual entry.');
-      }
+      });
     } catch (err) {
-      setExtractError(err.response?.data?.detail || err.message || 'AI evidence extraction failed.');
-      if (addToast) {
-        addToast({
-          type: 'error',
-          title: 'Extraction Error',
-          message: err.response?.data?.detail || err.message || 'AI evidence extraction failed.'
-        });
+      if (err.name !== 'AbortError') {
+        setExtractError(err.response?.data?.detail || err.message || 'AI evidence extraction failed.');
+        setExtractionLogs(prev => [
+          ...prev, 
+          { time: new Date().toLocaleTimeString(), text: `✕ Exception: ${err.message}`, type: 'error' }
+        ]);
       }
-    } finally {
       setIsExtracting(false);
     }
   };
@@ -148,7 +251,8 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
           </div>
           <button 
             onClick={onClose}
-            className="p-1 hover:bg-[#DCD6C5] text-[#1A1917] transition-colors border border-[#C8C1AE]"
+            disabled={isSaving}
+            className="p-1 hover:bg-[#DCD6C5] text-[#1A1917] transition-colors border border-[#C8C1AE] disabled:opacity-50 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -177,40 +281,103 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
 
         {/* AI Action & Zero Data Fabrication Warning Banner */}
         <div className="bg-[#FEF3C7] px-6 py-2.5 border-b border-[#FDE68A] flex items-center justify-between gap-3 font-mono">
-          <div className="text-[10px] text-[#B8860B] font-bold uppercase tracking-tight">
-            Zero Fabrication Policy: If paper omits any metric, leave field as "N/A".
+          <div className="text-[10px] text-[#B8860B] font-bold uppercase tracking-tight flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-[#B8860B]" />
+            <span>Zero Fabrication Policy: Leave omitted fields as "N/A"</span>
           </div>
 
-          <button
-            type="button"
-            onClick={handleAiExtract}
-            disabled={isExtracting}
-            className="bg-[#1A1917] hover:bg-[#2D7A53] text-[#F4F1EA] text-[11px] font-bold px-3 py-1 flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
-            title="Auto-extract all 7 matrix fields from abstract with Gemini LLM"
-          >
+          <div className="flex items-center gap-2">
             {isExtracting ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D94E28]" />
-                <span>Extracting...</span>
-              </>
+              <button
+                type="button"
+                onClick={handleAbort}
+                className="bg-[#C93B2B] hover:bg-[#A82A1B] text-white text-[11px] font-bold px-3 py-1 flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                title="Stop extraction process"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                <span>Abort</span>
+              </button>
             ) : (
-              <>
+              <button
+                type="button"
+                onClick={handleAiExtract}
+                disabled={isSaving}
+                className="bg-[#1A1917] hover:bg-[#2D7A53] text-[#F4F1EA] text-[11px] font-bold px-3 py-1 flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
+                title="Auto-extract all 7 matrix fields with Gemini streaming engine"
+              >
                 <Sparkles className="w-3.5 h-3.5 text-[#F59E0B]" />
-                <span>AI Auto-Extract</span>
-              </>
+                <span>✨ AI Auto-Extract</span>
+              </button>
             )}
-          </button>
+
+            {extractionLogs.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowTerminal(prev => !prev)}
+                className="bg-[#EDE9DF] hover:bg-[#DCD6C5] text-[#1A1917] text-[10px] font-bold px-2 py-1 flex items-center gap-1 border border-[#C8C1AE] cursor-pointer"
+                title="Toggle live terminal logs"
+              >
+                <Terminal className="w-3 h-3 text-[#2D7A53]" />
+                <span>Logs ({extractionLogs.length})</span>
+                {showTerminal ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              </button>
+            )}
+          </div>
         </div>
 
+        {/* Live Step Progress Bar */}
+        {isExtracting && (
+          <div className="bg-[#1A1917] text-white px-6 py-2 border-b border-[#333] font-mono text-xs animate-in fade-in duration-200">
+            <div className="flex items-center justify-between text-[10px] mb-1">
+              <div className="flex items-center gap-1.5 text-[#98D4A5] font-bold">
+                <Activity className="w-3.5 h-3.5 animate-spin" />
+                <span>{streamProgress.message || 'Synthesizing evidence...'}</span>
+              </div>
+              <span className="text-[#F59E0B] font-bold">{streamProgress.percent}%</span>
+            </div>
+            {/* Animated Bar Track */}
+            <div className="w-full bg-[#333] h-1.5 rounded-full overflow-hidden">
+              <div 
+                className="bg-gradient-to-r from-[#F59E0B] via-[#2D7A53] to-[#10B981] h-full transition-all duration-300 ease-out"
+                style={{ width: `${streamProgress.percent}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Real-Time Diagnostic Log Terminal Console */}
+        {showTerminal && extractionLogs.length > 0 && (
+          <div className="bg-[#1A1917] text-[#EFECE4] border-b border-[#333] font-mono text-[11px] p-3 max-h-36 overflow-y-auto space-y-1 shadow-inner select-text">
+            <div className="text-[10px] text-[#7A766F] font-bold uppercase tracking-wider pb-1 border-b border-[#333] flex items-center justify-between">
+              <span>Diagnostic Streaming Logs (SSE Channel)</span>
+              <span className="text-[#98D4A5]">● LIVE</span>
+            </div>
+            {extractionLogs.map((item, idx) => (
+              <div key={idx} className="flex items-start gap-2 leading-tight">
+                <span className="text-[#666] shrink-0">[{item.time}]</span>
+                <span className={
+                  item.type === 'error' ? 'text-[#F87171] font-bold' :
+                  item.type === 'warn' ? 'text-[#FBBF24] font-bold' :
+                  item.type === 'success' ? 'text-[#34D399] font-bold' :
+                  'text-[#E5E7EB]'
+                }>
+                  {item.text}
+                </span>
+              </div>
+            ))}
+            <div ref={logsEndRef} />
+          </div>
+        )}
+
         {/* Status Alerts */}
-        {extractSuccess && (
+        {extractSuccess && !isExtracting && (
           <div className="px-6 py-2 bg-[#E6F4EA] text-[#1E7E34] text-xs font-mono border-b border-[#C3E6CB] flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>{extractSuccess}</span>
           </div>
         )}
 
-        {extractError && (
+        {extractError && !isExtracting && (
           <div className="px-6 py-2 bg-[#FDE8E8] text-[#C93B2B] text-xs font-mono border-b border-[#F8B4B4] flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{extractError}</span>
@@ -325,7 +492,8 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
             <button
               type="button"
               onClick={handleResetToNA}
-              className="text-[#7A766F] hover:text-[#C93B2B] flex items-center gap-1 text-[11px] font-bold hover:underline transition-colors"
+              disabled={isSaving || isExtracting}
+              className="text-[#7A766F] hover:text-[#C93B2B] flex items-center gap-1 text-[11px] font-bold hover:underline transition-colors disabled:opacity-50 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset to N/A</span>

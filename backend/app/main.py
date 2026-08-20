@@ -750,7 +750,7 @@ def add_manual_paper(req: AddManualPaperRequest):
 @app.post("/api/papers/extract-evidence")
 def extract_paper_evidence(req: ExtractEvidenceRequest):
     """
-    Uses Gemini to extract empirical evidence across the 7-column matrix for a single paper.
+    Uses Gemini to extract empirical evidence across the 7-column matrix for a single paper (Synchronous).
     """
     if not req.abstract or req.abstract.strip() in ["", "N/A"]:
         raise HTTPException(
@@ -777,6 +777,33 @@ def extract_paper_evidence(req: ExtractEvidenceRequest):
     except Exception as e:
         logger.error(f"Evidence extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/stream/extract-evidence")
+def stream_paper_evidence_extraction(req: ExtractEvidenceRequest):
+    """
+    Server-Sent Events (SSE) streaming endpoint for Gemini evidence extraction with live diagnostic logs and progress bar.
+    """
+    if not req.abstract or req.abstract.strip() in ["", "N/A"]:
+        def err_stream():
+            yield f"data: {json.dumps({'event': 'error', 'message': 'Paper abstract is empty. Please fetch or enter an abstract.'})}\n\n"
+        return StreamingResponse(err_stream(), media_type="text/event-stream")
+
+    return StreamingResponse(
+        GeminiScreener.stream_extract_evidence_single_paper(
+            paper={
+                "id": req.paper_id,
+                "title": req.title,
+                "abstract": req.abstract,
+                "authors": req.authors,
+                "year": req.year,
+                "venue": req.venue
+            },
+            api_key=req.api_key,
+            model_name=req.model_name
+        ),
+        media_type="text/event-stream"
+    )
+
 
 
 

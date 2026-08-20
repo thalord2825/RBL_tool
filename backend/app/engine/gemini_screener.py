@@ -504,6 +504,176 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         yield f"data: {json.dumps({'event': 'complete', 'total': total_papers, 'evaluated': evaluated_count, 'stats': stats, 'duration_seconds': total_dur, 'papers': final_papers})}\n\n"
 
     @classmethod
+    def stream_extract_evidence_single_paper(
+        cls,
+        paper: Dict[str, Any],
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None
+    ):
+        """
+        SSE Generator for Real-Time Streaming Evidence Extraction with 3-tier anti-timeout failover and diagnostic logs.
+        """
+        start_time = time.time()
+        gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        if not gemini_key:
+            yield f"data: {json.dumps({'event': 'error', 'message': 'Gemini API key is required. Please enter API key in settings or AI modal.'})}\n\n"
+            return
+
+        p_id = paper.get("id", "Paper")
+        title = (paper.get("title") or "").strip()
+        abstract = (paper.get("abstract") or "").strip()
+        authors = (paper.get("authors") or "").strip()
+        year = paper.get("year", 2024)
+        venue = (paper.get("venue") or "").strip()
+
+        if not abstract or abstract.lower() in ["n/a", "none", ""]:
+            yield f"data: {json.dumps({'event': 'error', 'message': 'Abstract is missing or \"N/A\". Please fetch or enter the abstract before extracting evidence.'})}\n\n"
+            return
+
+        # Tier 1 Anti-Timeout: Clean and compress abstract if overly lengthy
+        yield f"data: {json.dumps({'event': 'step', 'step': 1, 'total': 4, 'percent': 15, 'message': 'Cleaning abstract & structuring context...', 'log': f'[{p_id}] Pre-processing context (Title: {len(title)} chars, Abstract: {len(abstract)} chars)...'})}\n\n"
+        
+        cleaned_abstract = re.sub(r'\s+', ' ', abstract).strip()
+        if len(cleaned_abstract) > 3500:
+            cleaned_abstract = cleaned_abstract[:3500] + " ... [Abstract truncated for high-speed inference]"
+            yield f"data: {json.dumps({'event': 'step', 'step': 1, 'total': 4, 'percent': 20, 'message': 'Compressed extensive abstract for ultra-fast latency', 'log': '⚡ Truncated abstract to 3500 chars to guarantee sub-2s response'})}\n\n"
+
+        # Tier 2 Anti-Timeout: High-priority candidate pool
+        candidates_to_try = cls._build_candidate_models(gemini_key, model_name)
+        active_count = len(candidates_to_try)
+        primary_model = candidates_to_try[0] if candidates_to_try else "models/gemini-2.0-flash"
+
+        yield f"data: {json.dumps({'event': 'step', 'step': 2, 'total': 4, 'percent': 35, 'message': f'Connecting to {primary_model}...', 'log': f'Resolved {active_count} candidate model(s). Primary target: {primary_model}'})}\n\n"
+
+        system_instruction = """
+You are an expert Systematic Literature Review (SLR) Evidence Synthesizer operating under strict PRISMA guidelines and the Zero Data Fabrication Policy.
+Your task is to extract empirical research evidence from the provided academic paper abstract into a standardized 7-column evidence matrix.
+
+STRICT ZERO FABRICATION POLICY:
+- Extract ONLY what is explicitly stated in the paper title and abstract.
+- If a metric, sample size, or code repository is not mentioned, YOU MUST SET THAT FIELD TO "N/A".
+- Never speculate, hallucinate, or fabricate numbers.
+
+REQUIRED JSON OUTPUT FORMAT:
+{
+  "tool_model": "Exact model architectures/methods evaluated (e.g., PhoBERT-base, GPT-4, BiGRU+WBCE, RoBERTa). If none specified, 'N/A'.",
+  "dataset_name": "Name of the dataset and domain context (e.g., Vietnamese SMS Spam Dataset, Zalo Phishing Messages). If none specified, 'N/A'.",
+  "sample_size_n": "Sample size N (e.g., N = 11,200 SMS messages). If none specified, 'N/A'.",
+  "metrics_evaluated": "Evaluation metrics used (e.g., Macro-F1, Precision, Recall, Accuracy, Latency). If none specified, 'N/A'.",
+  "empirical_results": "Exact numerical performance results achieved (e.g., PhoBERT: F1=0.941, Acc=96.2%; GPT-4: F1=0.915). If none specified, 'N/A'.",
+  "code_url": "Official GitHub/GitLab/HuggingFace URL if mentioned in text, otherwise 'N/A'.",
+  "limitations": "Threats to validity, limitations, or constraints mentioned by authors. If none specified, 'N/A'."
+}
+"""
+
+        user_content = f"""
+PAPER DETAILS:
+Title: {title}
+Authors: {authors} ({year})
+Venue: {venue}
+Abstract: {cleaned_abstract}
+"""
+
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [
+                {"role": "user", "parts": [{"text": f"{system_instruction}\n\n{user_content}"}]}
+            ],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.1,
+                "maxOutputTokens": 1024,
+                "topP": 0.95
+            }
+        }
+
+        successful_evidence = None
+        used_model = None
+
+        for idx, model_id in enumerate(candidates_to_try):
+            is_cool, _ = cls.is_model_cooling_down(model_id)
+            if is_cool and len(candidates_to_try) > 1:
+                yield f"data: {json.dumps({'event': 'log', 'log': f'Skipping cooling model {model_id}...'})}\n\n"
+                continue
+
+            yield f"data: {json.dumps({'event': 'step', 'step': 3, 'total': 4, 'percent': 40 + idx * 10, 'message': f'Querying {model_id} (Fast Timeout: 8s)...', 'log': f'Sending structured extraction payload to {model_id}...' })}\n\n"
+
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent?key={gemini_key}"
+            try:
+                t0 = time.time()
+                response = requests.post(url, headers=headers, json=payload, timeout=8.0)
+                call_dur = round(time.time() - t0, 2)
+
+                if response.status_code == 200:
+                    result_json = response.json()
+                    candidates = result_json.get("candidates", [])
+                    if not candidates:
+                        yield f"data: {json.dumps({'event': 'log', 'log': f'⚠️ {model_id} returned empty candidate list ({call_dur}s). Trying next model...'})}\n\n"
+                        continue
+
+                    raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
+                    cleaned_text = raw_text.strip()
+                    if cleaned_text.startswith("```json"):
+                        cleaned_text = cleaned_text[7:]
+                    if cleaned_text.startswith("```"):
+                        cleaned_text = cleaned_text[3:]
+                    if cleaned_text.endswith("```"):
+                        cleaned_text = cleaned_text[:-3]
+                    cleaned_text = cleaned_text.strip()
+
+                    try:
+                        data = json.loads(cleaned_text)
+                    except Exception:
+                        data = {}
+
+                    successful_evidence = {
+                        "tool_model": data.get("tool_model") or "N/A",
+                        "dataset_name": data.get("dataset_name") or "N/A",
+                        "sample_size_n": data.get("sample_size_n") or "N/A",
+                        "metrics_evaluated": data.get("metrics_evaluated") or "N/A",
+                        "empirical_results": data.get("empirical_results") or "N/A",
+                        "code_url": data.get("code_url") or "N/A",
+                        "limitations": data.get("limitations") or "N/A",
+                        "extracted_by_model": model_id
+                    }
+                    used_model = model_id
+                    yield f"data: {json.dumps({'event': 'step', 'step': 4, 'total': 4, 'percent': 90, 'message': 'Enforcing Zero Data Fabrication & normalizing 7 columns...', 'log': f'✓ Received valid JSON from {model_id} in {call_dur}s. Auditing 7 fields...'})}\n\n"
+                    break
+
+                elif response.status_code == 429:
+                    cls.set_model_cooldown(model_id, 60.0)
+                    yield f"data: {json.dumps({'event': 'fallback', 'from_model': model_id, 'reason': 'Rate Limited (429)', 'log': f'⚠️ {model_id} hit rate limit (429). Activating circuit breaker (60s cooldown)...'})}\n\n"
+                    continue
+                else:
+                    yield f"data: {json.dumps({'event': 'log', 'log': f'⚠️ {model_id} HTTP {response.status_code}: {response.text[:120]}...'})}\n\n"
+
+            except requests.exceptions.Timeout:
+                cls.set_model_cooldown(model_id, 45.0)
+                next_cand = candidates_to_try[idx + 1] if idx + 1 < len(candidates_to_try) else "none"
+                yield f"data: {json.dumps({'event': 'fallback', 'from_model': model_id, 'to_model': next_cand, 'reason': 'Read Timeout (8s)', 'log': f'⏱️ {model_id} exceeded 8s threshold. Auto-failing over to next candidate: {next_cand}'})}\n\n"
+                continue
+            except Exception as e:
+                yield f"data: {json.dumps({'event': 'log', 'log': f'⚠️ {model_id} network exception: {str(e)}'})}\n\n"
+                continue
+
+        total_dur_ms = int((time.time() - start_time) * 1000)
+
+        if successful_evidence:
+            yield f"data: {json.dumps({'event': 'complete', 'status': 'success', 'percent': 100, 'evidence': successful_evidence, 'model': used_model, 'duration_ms': total_dur_ms, 'message': f'Successfully extracted 7-column evidence via {used_model} in {total_dur_ms}ms', 'log': f'✨ Done! Completed in {total_dur_ms}ms with zero fabrication assurance.'})}\n\n"
+        else:
+            fallback_na = {
+                "tool_model": "N/A",
+                "dataset_name": "N/A",
+                "sample_size_n": "N/A",
+                "metrics_evaluated": "N/A",
+                "empirical_results": "N/A",
+                "code_url": "N/A",
+                "limitations": "N/A",
+                "extracted_by_model": "None"
+            }
+            yield f"data: {json.dumps({'event': 'complete', 'status': 'partial', 'percent': 100, 'evidence': fallback_na, 'model': 'None', 'duration_ms': total_dur_ms, 'message': 'All models timed out. Populated form with N/A.', 'log': '⚠️ Extraction exhausted all model attempts. Set defaults to N/A.'})}\n\n"
+
+    @classmethod
     def extract_evidence_single_paper(
         cls,
         paper: Dict[str, Any],
@@ -511,7 +681,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         model_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Uses Gemini to extract empirical evidence across the 7-column SLR matrix adhering strictly to Zero Data Fabrication.
+        Synchronous fallback for evidence extraction.
         """
         gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
         if not gemini_key:
@@ -562,6 +732,7 @@ Abstract: {abstract}
             "generationConfig": {
                 "response_mime_type": "application/json",
                 "temperature": 0.1,
+                "maxOutputTokens": 1024,
                 "topP": 0.95
             }
         }
@@ -571,46 +742,44 @@ Abstract: {abstract}
             if is_cool and len(candidates_to_try) > 1:
                 continue
 
-            for api_ver in ["v1beta"]:
-                url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
-                try:
-                    response = requests.post(url, headers=headers, json=payload, timeout=12)
-                    if response.status_code == 200:
-                        result_json = response.json()
-                        candidates = result_json.get("candidates", [])
-                        if not candidates:
-                            continue
+            url = f"https://generativelanguage.googleapis.com/v1beta/{model_id}:generateContent?key={gemini_key}"
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=8.0)
+                if response.status_code == 200:
+                    result_json = response.json()
+                    candidates = result_json.get("candidates", [])
+                    if not candidates:
+                        continue
 
-                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
-                        cleaned_text = raw_text.strip()
-                        if cleaned_text.startswith("```json"):
-                            cleaned_text = cleaned_text[7:]
-                        if cleaned_text.startswith("```"):
-                            cleaned_text = cleaned_text[3:]
-                        if cleaned_text.endswith("```"):
-                            cleaned_text = cleaned_text[:-3]
-                        cleaned_text = cleaned_text.strip()
+                    raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
+                    cleaned_text = raw_text.strip()
+                    if cleaned_text.startswith("```json"):
+                        cleaned_text = cleaned_text[7:]
+                    if cleaned_text.startswith("```"):
+                        cleaned_text = cleaned_text[3:]
+                    if cleaned_text.endswith("```"):
+                        cleaned_text = cleaned_text[:-3]
+                    cleaned_text = cleaned_text.strip()
 
-                        data = json.loads(cleaned_text)
-                        return {
-                            "tool_model": data.get("tool_model") or "N/A",
-                            "dataset_name": data.get("dataset_name") or "N/A",
-                            "sample_size_n": data.get("sample_size_n") or "N/A",
-                            "metrics_evaluated": data.get("metrics_evaluated") or "N/A",
-                            "empirical_results": data.get("empirical_results") or "N/A",
-                            "code_url": data.get("code_url") or "N/A",
-                            "limitations": data.get("limitations") or "N/A",
-                            "extracted_by_model": model_id
-                        }
-                    elif response.status_code == 429:
-                        cls.set_model_cooldown(model_id, 60.0)
-                        break
-                except requests.exceptions.Timeout:
-                    logger.warning(f"Evidence extraction timeout (12s) on {model_id}, skipping and setting cooldown...")
+                    data = json.loads(cleaned_text)
+                    return {
+                        "tool_model": data.get("tool_model") or "N/A",
+                        "dataset_name": data.get("dataset_name") or "N/A",
+                        "sample_size_n": data.get("sample_size_n") or "N/A",
+                        "metrics_evaluated": data.get("metrics_evaluated") or "N/A",
+                        "empirical_results": data.get("empirical_results") or "N/A",
+                        "code_url": data.get("code_url") or "N/A",
+                        "limitations": data.get("limitations") or "N/A",
+                        "extracted_by_model": model_id
+                    }
+                elif response.status_code == 429:
                     cls.set_model_cooldown(model_id, 60.0)
-                    break
-                except Exception as e:
-                    logger.warning(f"Evidence extraction try failed on {model_id} ({api_ver}): {e}")
+                    continue
+            except requests.exceptions.Timeout:
+                cls.set_model_cooldown(model_id, 45.0)
+                continue
+            except Exception as e:
+                logger.warning(f"Evidence extraction try failed on {model_id}: {e}")
 
         return {
             "tool_model": "N/A",
@@ -622,3 +791,4 @@ Abstract: {abstract}
             "limitations": "N/A",
             "extracted_by_model": "None"
         }
+

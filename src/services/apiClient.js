@@ -377,7 +377,7 @@ export const apiClient = {
     return res.data;
   },
 
-  // Empirical Evidence Auto-Extraction with Gemini
+  // Empirical Evidence Auto-Extraction with Gemini (Synchronous Fallback)
   extractEvidence: async ({ paperId, title, abstract, authors = '', year = 2024, venue = '', apiKey, modelName = 'auto', projectId = 'default' }) => {
     const res = await api.post('/papers/extract-evidence', {
       paper_id: paperId,
@@ -392,6 +392,83 @@ export const apiClient = {
     });
     return res.data;
   },
+
+  // Real-Time Streaming Empirical Evidence Auto-Extraction with Gemini
+  streamExtractEvidence: async ({
+    paperId,
+    title,
+    abstract,
+    authors = '',
+    year = 2024,
+    venue = '',
+    apiKey,
+    modelName = 'auto',
+    projectId = 'default',
+    signal,
+    onEvent,
+    onError
+  }) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/stream/extract-evidence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          paper_id: paperId,
+          title,
+          abstract,
+          authors,
+          year,
+          venue,
+          api_key: apiKey,
+          model_name: modelName,
+          project_id: projectId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            try {
+              const jsonStr = trimmed.replace(/^data:\s*/, '');
+              const eventData = JSON.parse(jsonStr);
+              if (onEvent) onEvent(eventData);
+            } catch (e) {
+              console.warn('Failed to parse SSE evidence chunk:', e);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        if (onEvent) {
+          onEvent({ event: 'log', log: '⛔ Extraction aborted by user.' });
+        }
+      } else if (onError) {
+        onError(err);
+      } else {
+        throw err;
+      }
+    }
+  },
 };
 
 export default apiClient;
+
