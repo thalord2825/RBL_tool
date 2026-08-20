@@ -67,7 +67,8 @@ export default function EvidenceTable({
   onFilterChange,
   isLoading = false,
   onOpenAddPaper,
-  onOpenCsvImport
+  onOpenCsvImport,
+  addToast
 }) {
   const [filterStage, setFilterStage] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -106,7 +107,25 @@ export default function EvidenceTable({
     if (!text) return;
     navigator.clipboard.writeText(text);
     setIsAbstractCopied(true);
+    addToast?.({
+      type: 'copy',
+      title: 'Abstract Copied',
+      message: 'Full publication abstract copied to clipboard.'
+    });
     setTimeout(() => setIsAbstractCopied(false), 2000);
+  };
+
+  const handleCopyDoi = (paperId, doi) => {
+    if (!doi) return;
+    const link = doi.startsWith('http') ? doi : `https://doi.org/${doi}`;
+    navigator.clipboard.writeText(link);
+    setCopiedDoiId(paperId);
+    addToast?.({
+      type: 'copy',
+      title: 'DOI Copied',
+      message: `Copied canonical DOI link (${doi}) to clipboard.`
+    });
+    setTimeout(() => setCopiedDoiId(null), 2000);
   };
 
   // Multi-Select State (External or Internal)
@@ -326,15 +345,28 @@ export default function EvidenceTable({
           setSelectedAbstractPaper(res.paper || { ...selectedAbstractPaper, abstract: res.abstract });
           setEditableAbstractText(res.abstract);
         }
+        addToast?.({
+          type: 'success',
+          title: 'Abstract Resolved',
+          message: `Auto-recovered abstract from DOI landing page for [${paper.id}].`
+        });
       } else {
-        alert(`Could not resolve abstract automatically for [${paper.id}]. You can manually paste it.`);
+        addToast?.({
+          type: 'warning',
+          title: 'Manual Abstract Needed',
+          message: `Could not fetch abstract automatically for [${paper.id}]. Please paste it manually.`
+        });
         // Open manual edit modal
         setSelectedAbstractPaper(paper);
         setEditableAbstractText(paper.abstract && paper.abstract !== 'N/A' ? paper.abstract : '');
         setIsEditingAbstract(true);
       }
     } catch (err) {
-      alert(`Error fetching abstract: ${err.message}`);
+      addToast?.({
+        type: 'error',
+        title: 'Abstract Fetch Failed',
+        message: err.message
+      });
     } finally {
       setFetchingAbstractId(null);
     }
@@ -355,9 +387,17 @@ export default function EvidenceTable({
       if (res.papers && onBulkPapersUpdate) {
         onBulkPapersUpdate(res.papers);
       }
-      alert(`Auto-Recovery Complete: Resolved ${res.resolved_count} of ${res.total_requested} abstracts from DOI landing pages & academic APIs!`);
+      addToast?.({
+        type: 'success',
+        title: 'Auto-Recovery Complete',
+        message: `Resolved ${res.resolved_count} of ${res.total_requested} abstracts from DOI landing pages & academic APIs.`
+      });
     } catch (err) {
-      alert(`Bulk abstract recovery failed: ${err.message}`);
+      addToast?.({
+        type: 'error',
+        title: 'Bulk Recovery Failed',
+        message: err.message
+      });
     } finally {
       setIsBulkFetchingAbstracts(false);
     }
@@ -381,8 +421,17 @@ export default function EvidenceTable({
       }
       setSelectedAbstractPaper(res.paper);
       setIsEditingAbstract(false);
+      addToast?.({
+        type: 'success',
+        title: 'Abstract Saved',
+        message: `Abstract text updated successfully for [${selectedAbstractPaper.id}].`
+      });
     } catch (err) {
-      alert(`Failed to save abstract: ${err.message}`);
+      addToast?.({
+        type: 'error',
+        title: 'Save Failed',
+        message: err.message
+      });
     } finally {
       setIsSavingAbstract(false);
     }
@@ -488,15 +537,6 @@ export default function EvidenceTable({
 
     setSelectedPaperIds(next);
     setLastSelectedIndex(index);
-  };
-
-  // Copy DOI to clipboard
-  const handleCopyDoi = (paperId, doi) => {
-    if (!doi) return;
-    const cleanDoi = doi.startsWith('http') ? doi : `https://doi.org/${doi}`;
-    navigator.clipboard.writeText(cleanDoi);
-    setCopiedDoiId(paperId);
-    setTimeout(() => setCopiedDoiId(null), 2000);
   };
 
   // Source Badge Color Accent Mapping

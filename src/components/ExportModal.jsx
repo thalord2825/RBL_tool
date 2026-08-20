@@ -7,7 +7,8 @@ export default function ExportModal({
   onClose, 
   gitSettings, 
   searchQuery, 
-  sources 
+  sources,
+  addToast
 }) {
   const [activeTab, setActiveTab] = useState('01_all_records.csv');
   const [generatedFiles, setGeneratedFiles] = useState({});
@@ -48,11 +49,22 @@ export default function ExportModal({
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+    addToast?.({
+      type: 'success',
+      title: 'File Downloaded',
+      message: `Downloaded ${filename} successfully.`
+    });
   };
 
   const handleDownloadAll = () => {
+    const filenames = Object.keys(generatedFiles);
     Object.entries(generatedFiles).forEach(([filename, content]) => {
       handleDownloadSingle(filename, content);
+    });
+    addToast?.({
+      type: 'success',
+      title: 'Batch Export Ready',
+      message: `Exported all ${filenames.length} PRISMA research files.`
     });
   };
 

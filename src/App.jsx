@@ -15,10 +15,23 @@ import ProtocolSettingsModal, { DEFAULT_PICO, DEFAULT_IC_LIST, DEFAULT_EC_LIST }
 import AiScreenMiniDock from './components/AiScreenMiniDock';
 import CsvImportModal from './components/CsvImportModal';
 import AddPaperManualModal from './components/AddPaperManualModal';
+import ToastContainer from './components/ToastContainer';
 
 import { apiClient, getStoredGeminiApiKey } from './services/apiClient';
 
 export default function App() {
+  // Toast Notification State
+  const [toasts, setToasts] = useState([]);
+
+  const addToast = useCallback(({ type = 'info', title, message, duration = 3500 }) => {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    setToasts(prev => [...prev.slice(-4), { id, type, title, message, duration }]);
+  }, []);
+
+  const removeToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
   // Corpus & Search State
   const [papers, setPapers] = useState([]);
   const [query, setQuery] = useState(
@@ -183,8 +196,10 @@ export default function App() {
         ecList: newEcList
       });
       addLog('SUCCESS', `Protocol updated: ${newIcList.length} ICs, ${newEcList.length} ECs saved to SQLite.`);
+      addToast({ type: 'success', title: 'Protocol Saved', message: `Saved ${newIcList.length} ICs and ${newEcList.length} ECs to SQLite database.` });
     } catch (err) {
       addLog('WARN', `Saved protocol locally (server sync warning: ${err.message})`);
+      addToast({ type: 'warning', title: 'Protocol Saved Locally', message: `Synced locally: ${err.message}` });
     }
   };
 
@@ -289,10 +304,16 @@ export default function App() {
               stage: 'COMPLETE'
             }));
             addLog('SUCCESS', `Harvest complete: +${eventData.new_added} unique papers added, ${eventData.duplicates_filtered} duplicates filtered (${eventData.duration_sec}s).`);
+            addToast({
+              type: 'success',
+              title: 'Harvest Completed',
+              message: `Ingested ${eventData.new_added || 0} unique papers (${eventData.duplicates_filtered || 0} duplicates resolved).`
+            });
           }
         },
         onError: (err) => {
           addLog('ERROR', `Harvest stream error: ${err.message}`);
+          addToast({ type: 'error', title: 'Harvest Failed', message: err.message });
           setHarvestProgress(prev => ({
             ...prev,
             isDone: true,
@@ -476,17 +497,24 @@ export default function App() {
               isDone: true
             }));
             addLog('SUCCESS', `AI Screening completed for ${eventData.evaluated_count || totalToScreen} papers in ${eventData.total_duration_sec || 0}s!`);
+            addToast({
+              type: 'success',
+              title: 'AI Screening Complete',
+              message: `Screened ${eventData.evaluated_count || totalToScreen} papers with PRISMA rigor (${eventData.total_duration_sec || 0}s).`
+            });
           } else if (eventData.event === 'error') {
             addLog('ERROR', `AI Screening error: ${eventData.message}`);
+            addToast({ type: 'error', title: 'AI Screening Error', message: eventData.message });
           }
         },
         onError: (err) => {
           addLog('ERROR', `AI Screening stream failure: ${err.message}`);
-          alert(`AI Screening failed: ${err.message}`);
+          addToast({ type: 'error', title: 'AI Screening Failed', message: err.message });
         }
       });
     } catch (err) {
       addLog('ERROR', `AI Screening exception: ${err.message}`);
+      addToast({ type: 'error', title: 'AI Screening Exception', message: err.message });
     } finally {
       setIsScreening(false);
     }
@@ -505,9 +533,14 @@ export default function App() {
       setPapers(res.papers || []);
       setDuplicatePair(null);
       addLog('DEDUP', `Merged duplicate: Kept [${keepId}], removed [${removeId}].`);
+      addToast({
+        type: 'success',
+        title: 'Duplicates Merged',
+        message: `Successfully merged [${removeId}] into [${keepId}] preserving richest metadata.`
+      });
     } catch (err) {
       addLog('ERROR', `Merge failed: ${err.message}`);
-      alert(`Merge failed: ${err.message}`);
+      addToast({ type: 'error', title: 'Merge Failed', message: err.message });
     }
   };
 
@@ -521,8 +554,14 @@ export default function App() {
       }
       setDuplicatePair(null);
       addLog('DEDUP', `Persistently dismissed duplicate flag on [${paperId}].`);
+      addToast({
+        type: 'info',
+        title: 'Duplicate Flag Dismissed',
+        message: `Paper [${paperId}] marked as unique and will not be re-flagged.`
+      });
     } catch (err) {
       addLog('ERROR', `Failed to dismiss duplicate: ${err.message}`);
+      addToast({ type: 'error', title: 'Dismiss Failed', message: err.message });
     }
   };
 
@@ -531,8 +570,14 @@ export default function App() {
       const updated = await apiClient.updatePaper(paperId, updates);
       setPapers(prev => prev.map(p => p.id === paperId ? updated : p));
       addLog('SUCCESS', `Updated status on [${paperId}] -> ${updates.status || 'saved'}.`);
+      addToast({
+        type: 'success',
+        title: 'Status Updated',
+        message: `Moved [${paperId}] to ${updates.status || 'saved'}.`
+      });
     } catch (err) {
       addLog('ERROR', `Failed to update paper [${paperId}]: ${err.message}`);
+      addToast({ type: 'error', title: 'Update Failed', message: err.message });
     }
   };
 
@@ -544,8 +589,14 @@ export default function App() {
       });
       setPapers(prev => prev.map(p => p.id === paperId ? updated : p));
       addLog('WARN', `Excluded [${paperId}] with reason: ${rationale}`);
+      addToast({
+        type: 'warning',
+        title: 'Paper Excluded',
+        message: `Excluded [${paperId}]: ${rationale ? rationale.slice(0, 55) : 'Manual exclusion'}`
+      });
     } catch (err) {
       addLog('ERROR', `Failed to exclude paper: ${err.message}`);
+      addToast({ type: 'error', title: 'Exclusion Failed', message: err.message });
     }
   };
 
@@ -557,8 +608,14 @@ export default function App() {
       });
       setPapers(prev => prev.map(p => p.id === paperId ? updated : p));
       addLog('SUCCESS', `Saved 7-column evidence extraction for [${paperId}].`);
+      addToast({
+        type: 'success',
+        title: 'Evidence Matrix Saved',
+        message: `Saved 7-column empirical data extraction for [${paperId}].`
+      });
     } catch (err) {
       addLog('ERROR', `Failed to save extraction: ${err.message}`);
+      addToast({ type: 'error', title: 'Extraction Save Failed', message: err.message });
     }
   };
 
@@ -572,8 +629,14 @@ export default function App() {
         setPapers(res.papers);
       }
       addLog('WARN', `Deleted paper [${paperId}] from corpus.`);
+      addToast({
+        type: 'delete',
+        title: 'Paper Deleted',
+        message: `Permanently removed [${paperId}] from SQLite database.`
+      });
     } catch (err) {
       addLog('ERROR', `Failed to delete paper: ${err.message}`);
+      addToast({ type: 'error', title: 'Delete Failed', message: err.message });
       fetchPapers();
     }
   };
@@ -602,8 +665,14 @@ export default function App() {
         setPapers(res.papers);
       }
       addLog('SUCCESS', `Bulk updated ${paperIds.length} papers -> ${updates.status || 'saved'}.`);
+      addToast({
+        type: 'success',
+        title: 'Bulk Status Updated',
+        message: `Updated screening status on ${paperIds.length} selected papers to ${updates.status || 'saved'}.`
+      });
     } catch (err) {
       addLog('ERROR', `Failed bulk update: ${err.message}`);
+      addToast({ type: 'error', title: 'Bulk Update Failed', message: err.message });
       fetchPapers();
     }
   };
@@ -621,8 +690,14 @@ export default function App() {
         setPapers(res.papers);
       }
       addLog('WARN', `Bulk deleted ${paperIds.length} papers from corpus.`);
+      addToast({
+        type: 'delete',
+        title: 'Bulk Deletion Complete',
+        message: `Permanently removed ${paperIds.length} papers from SQLite corpus.`
+      });
     } catch (err) {
       addLog('ERROR', `Failed bulk delete: ${err.message}`);
+      addToast({ type: 'error', title: 'Bulk Delete Failed', message: err.message });
       fetchPapers();
     }
   };
@@ -700,6 +775,7 @@ export default function App() {
       <EvidenceTable
         papers={papers}
         isLoading={isLoading}
+        addToast={addToast}
         onOpenAddPaper={() => setIsAddPaperModalOpen(true)}
         onOpenCsvImport={() => setIsCsvImportModalOpen(true)}
         onUpdateStatus={handleUpdateStatus}
@@ -784,6 +860,11 @@ export default function App() {
             fetchPapers();
           }
           addLog('SUCCESS', `CSV Ingestion: +${res.new_added || 0} unique papers added (${res.duplicates_filtered || 0} duplicates filtered).`);
+          addToast({
+            type: 'success',
+            title: 'CSV Ingest Completed',
+            message: `Ingested ${res.new_added || 0} unique papers (${res.duplicates_filtered || 0} duplicates filtered).`
+          });
         }}
       />
 
@@ -799,8 +880,18 @@ export default function App() {
           }
           if (isDuplicate) {
             addLog('WARN', `Added paper [${savedPaper?.id || 'P'}] "${savedPaper?.title?.slice(0, 45)}..." (Flagged as potential duplicate).`);
+            addToast({
+              type: 'warning',
+              title: 'Paper Added (Duplicate Flagged)',
+              message: `Added [${savedPaper?.id || 'P'}] "${savedPaper?.title?.slice(0, 40)}..." (Potential duplicate detected).`
+            });
           } else {
             addLog('SUCCESS', `Added paper [${savedPaper?.id || 'P'}] "${savedPaper?.title?.slice(0, 45)}..." to corpus.`);
+            addToast({
+              type: 'success',
+              title: 'Paper Added Successfully',
+              message: `Added [${savedPaper?.id || 'P'}] "${savedPaper?.title?.slice(0, 40)}..." to SQLite corpus.`
+            });
           }
         }}
       />
@@ -841,6 +932,7 @@ export default function App() {
         gitSettings={gitSettings}
         searchQuery={query}
         sources={sources}
+        addToast={addToast}
       />
 
       {/* Research Telemetry & Activity Backlog Terminal Drawer */}
@@ -854,6 +946,12 @@ export default function App() {
         isScreening={isScreening && !isAiProgressModalOpen}
         progress={aiProgress}
         onExpand={() => setIsAiProgressModalOpen(true)}
+      />
+
+      {/* Modern In-App Toast Mini-Popup System */}
+      <ToastContainer
+        toasts={toasts}
+        onDismiss={removeToast}
       />
 
     </div>
