@@ -1,6 +1,7 @@
 import re
 import io
 import json
+import difflib
 import logging
 import requests
 import xml.etree.ElementTree as ET
@@ -112,9 +113,13 @@ class MetadataFetcher:
         u = url.strip()
 
         # 1. ACL Anthology PDF: https://aclanthology.org/2023.emnlp-main.315.pdf -> https://aclanthology.org/2023.emnlp-main.315
-        m_acl = re.match(r'^(https?://aclanthology\.org/[^/]+?)\.pdf$', u, re.I)
+        m_acl = re.search(r'aclanthology\.org/([0-9]{4}\.[^/?#]+?|\w+-\w+\.[0-9]+|\w+-[0-9]+)\.pdf', u, re.I)
         if m_acl:
-            return m_acl.group(1)
+            return f"https://aclanthology.org/{m_acl.group(1)}"
+        
+        m_acl_gen = re.match(r'^(https?://aclanthology\.org/[^/?#]+?)\.pdf$', u, re.I)
+        if m_acl_gen:
+            return m_acl_gen.group(1)
 
         # 2. arXiv PDF: https://arxiv.org/pdf/2303.08774.pdf -> https://arxiv.org/abs/2303.08774
         m_arxiv = re.search(r'arxiv\.org/pdf/([0-9]{4}\.[0-9]{4,5}(?:v[0-9]+)?|[a-z\-]+/[0-9]{7})(?:\.pdf)?', u, re.I)
@@ -164,7 +169,8 @@ class MetadataFetcher:
 
         try:
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8"
             }
             res = requests.get(pdf_url, headers=headers, timeout=14, stream=True)
             if res.status_code != 200:
@@ -219,23 +225,38 @@ class MetadataFetcher:
                 # Extract first bold/distinctive lines before authors/abstract
                 lines = [ln.strip() for ln in page1_text.split('\n') if ln.strip() and len(ln.strip()) > 3]
                 filtered_lines = []
-                for ln in lines[:8]:
-                    if not any(h in ln.lower() for h in ['proceedings of', 'copyright', 'isbn', 'issn', 'http', 'vol.', 'no.', 'pages']):
-                        filtered_lines.append(ln)
+                noise_words = [
+                    'proceedings of', 'conference on', 'transactions on', 'journal of',
+                    'copyright', 'isbn', 'issn', 'http', 'vol.', 'no.', 'pages',
+                    'association for computational linguistics', 'ieee', 'acm', 'springer',
+                    'elsevier', 'january', 'february', 'march', 'april', 'may', 'june',
+                    'july', 'august', 'september', 'october', 'november', 'december',
+                    'all rights reserved'
+                ]
+                for ln in lines[:10]:
+                    if not any(h in ln.lower() for h in noise_words):
+                        # Ensure line is not purely dates, page numbers, or symbols
+                        if not re.match(r'^[\d\s\-\.,/–—]+$', ln):
+                            filtered_lines.append(ln)
+
                 if filtered_lines:
                     candidate_title = filtered_lines[0]
-                    if len(filtered_lines) > 1 and len(filtered_lines[0].split()) < 5:
+                    if len(filtered_lines) > 1 and len(filtered_lines[0].split()) < 6:
                         candidate_title += " " + filtered_lines[1]
 
-            # 7. Search OpenAlex with extracted title for enriched metadata
+            # 7. Search OpenAlex with extracted title for enriched metadata (WITH STRICT TITLE SIMILARITY CHECK)
             if candidate_title and len(candidate_title.split()) >= 3:
                 oa_res = cls.fetch_by_title_query(candidate_title)
                 if oa_res and oa_res.get("title"):
-                    if not oa_res.get("abstract") or oa_res["abstract"] == "N/A":
-                        oa_res["abstract"] = abstract_text or "N/A"
-                    oa_res["url"] = pdf_url
-                    oa_res["source"] = "PDF Stream (via OpenAlex Search)"
-                    return oa_res
+                    ratio = difflib.SequenceMatcher(None, candidate_title.lower(), oa_res["title"].lower()).ratio()
+                    if ratio >= 0.65 or (len(candidate_title.split()) >= 3 and all(w.lower() in oa_res["title"].lower() for w in candidate_title.split()[:3])):
+                        if not oa_res.get("abstract") or oa_res["abstract"] == "N/A":
+                            oa_res["abstract"] = abstract_text or "N/A"
+                        oa_res["url"] = pdf_url
+                        oa_res["source"] = "PDF Stream (via OpenAlex Search)"
+                        return oa_res
+                    else:
+                        logger.warning(f"OpenAlex title similarity ({ratio:.2f}) too low for PDF title query '{candidate_title}' vs '{oa_res.get('title')}'. Skipping OpenAlex override.")
 
             # 8. Fallback to direct PDF page 1 extraction
             if candidate_title or abstract_text:
@@ -735,22 +756,25 @@ class MetadataFetcher:
         if search_query_title and (not result["authors"] or not result["abstract"] or result["abstract"] == "N/A" or len(result["abstract"]) < 40):
             logger.info(f"Triggering OpenAlex title-search fallback for slug query: '{search_query_title}'...")
             oa_search_result = cls.fetch_by_title_query(search_query_title)
-            if oa_search_result:
-                if oa_search_result.get("title"):
+            if oa_search_result and oa_search_result.get("title"):
+                ratio = difflib.SequenceMatcher(None, search_query_title.lower(), oa_search_result["title"].lower()).ratio()
+                if ratio >= 0.65 or (len(search_query_title.split()) >= 3 and all(w.lower() in oa_search_result["title"].lower() for w in search_query_title.split()[:3])):
                     result["title"] = oa_search_result["title"]
-                if oa_search_result.get("authors") and not result["authors"]:
-                    result["authors"] = oa_search_result["authors"]
-                if oa_search_result.get("abstract") and oa_search_result["abstract"] != "N/A":
-                    result["abstract"] = oa_search_result["abstract"]
-                if oa_search_result.get("year"):
-                    result["year"] = oa_search_result["year"]
-                if oa_search_result.get("venue") and not result["venue"]:
-                    result["venue"] = oa_search_result["venue"]
-                if oa_search_result.get("doi"):
-                    result["doi"] = oa_search_result["doi"]
-                if oa_search_result.get("citations_count"):
-                    result["citations_count"] = oa_search_result["citations_count"]
-                result["source"] = f"{domain_source} (via OpenAlex Search)"
+                    if oa_search_result.get("authors") and not result["authors"]:
+                        result["authors"] = oa_search_result["authors"]
+                    if oa_search_result.get("abstract") and oa_search_result["abstract"] != "N/A":
+                        result["abstract"] = oa_search_result["abstract"]
+                    if oa_search_result.get("year"):
+                        result["year"] = oa_search_result["year"]
+                    if oa_search_result.get("venue") and not result["venue"]:
+                        result["venue"] = oa_search_result["venue"]
+                    if oa_search_result.get("doi"):
+                        result["doi"] = oa_search_result["doi"]
+                    if oa_search_result.get("citations_count"):
+                        result["citations_count"] = oa_search_result["citations_count"]
+                    result["source"] = f"{domain_source} (via OpenAlex Search)"
+                else:
+                    logger.warning(f"OpenAlex title similarity ({ratio:.2f}) too low for HTML query '{search_query_title}' vs '{oa_search_result.get('title')}'. Skipping OpenAlex override.")
 
         # Clean Title formatting
         if result["title"]:
