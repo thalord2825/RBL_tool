@@ -200,9 +200,15 @@ export const apiClient = {
     return res.data;
   },
 
-  // Re-scan duplicate author overlap flags
+  // Re-scan duplicate flags
   checkDuplicates: async (projectId = 'default') => {
     const res = await api.post('/papers/check-duplicates', null, { params: { project_id: projectId } });
+    return res.data;
+  },
+
+  // Dismiss duplicate flag persistently
+  dismissDuplicate: async (paperId, projectId = 'default') => {
+    const res = await api.post(`/papers/${paperId}/dismiss-duplicate`, null, { params: { project_id: projectId } });
     return res.data;
   },
 

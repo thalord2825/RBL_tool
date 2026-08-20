@@ -401,10 +401,28 @@ def update_paper(paper_id: str, updates: PaperUpdate, project_id: str = "default
     if not clean_updates:
         raise HTTPException(status_code=400, detail="No valid update fields provided.")
         
+    if clean_updates.get("status") == "INCLUDED":
+        clean_updates["exclusion_reason"] = None
+        if clean_updates.get("ai_decision") == "EXCLUDED":
+            clean_updates["ai_decision"] = "INCLUDED"
+
     updated = Database.update_paper(paper_id, clean_updates, project_id=project_id)
     if not updated:
         raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found.")
     return updated
+
+@app.post("/api/papers/{paper_id}/dismiss-duplicate")
+def dismiss_duplicate_paper(paper_id: str, project_id: str = "default"):
+    updated = Database.dismiss_duplicate(paper_id, project_id=project_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Paper '{paper_id}' not found.")
+    all_papers = Database.get_all_papers(project_id)
+    flagged = DeduplicationEngine.flag_corpus_duplicates(all_papers)
+    return {
+        "status": "dismissed",
+        "paper": updated,
+        "papers": flagged
+    }
 
 @app.delete("/api/papers/{paper_id}")
 def delete_paper(paper_id: str, project_id: str = "default"):
@@ -418,6 +436,10 @@ def bulk_update_papers(req: BulkUpdatePapersRequest):
     clean_updates = {k: v for k, v in req.updates.dict().items() if v is not None}
     if not clean_updates:
         raise HTTPException(status_code=400, detail="No valid update fields provided.")
+    if clean_updates.get("status") == "INCLUDED":
+        clean_updates["exclusion_reason"] = None
+        if clean_updates.get("ai_decision") == "EXCLUDED":
+            clean_updates["ai_decision"] = "INCLUDED"
     updated_count = Database.bulk_update_papers(req.paper_ids, clean_updates, project_id=req.project_id)
     all_papers = Database.get_all_papers(req.project_id)
     flagged = DeduplicationEngine.flag_corpus_duplicates(all_papers)

@@ -513,14 +513,14 @@ export default function App() {
 
   const handleDismissDuplicate = async (paperId) => {
     try {
-      await apiClient.updatePaper(paperId, {
-        duplicate_flag: false,
-        duplicate_with_id: null,
-        duplicate_reason: null
-      });
-      setPapers(prev => prev.map(p => p.id === paperId ? { ...p, duplicate_flag: false } : p));
+      const res = await apiClient.dismissDuplicate(paperId);
+      if (res && res.papers) {
+        setPapers(res.papers);
+      } else {
+        setPapers(prev => prev.map(p => p.id === paperId ? { ...p, duplicate_flag: false, duplicate_resolved: true } : p));
+      }
       setDuplicatePair(null);
-      addLog('DEDUP', `Dismissed duplicate flag on [${paperId}].`);
+      addLog('DEDUP', `Persistently dismissed duplicate flag on [${paperId}].`);
     } catch (err) {
       addLog('ERROR', `Failed to dismiss duplicate: ${err.message}`);
     }

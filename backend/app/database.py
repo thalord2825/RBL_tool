@@ -67,7 +67,9 @@ class Database:
                 "ai_rationale": "TEXT",
                 "duplicate_flag": "INTEGER DEFAULT 0",
                 "duplicate_with_id": "TEXT",
-                "duplicate_reason": "TEXT"
+                "duplicate_reason": "TEXT",
+                "duplicate_resolved": "INTEGER DEFAULT 0",
+                "matched_ics": "TEXT"
             }
             for col_name, col_type in new_cols.items():
                 if col_name not in columns:
@@ -119,6 +121,7 @@ class Database:
             for row in rows:
                 d = dict(row)
                 d["duplicate_flag"] = bool(d.get("duplicate_flag", 0))
+                d["duplicate_resolved"] = bool(d.get("duplicate_resolved", 0))
                 papers.append(d)
             return papers
 
@@ -139,6 +142,11 @@ class Database:
                             p_id = f"P{current_count:03d}"
                             
                         created_at = p.get("created_at") or datetime.now().isoformat()
+                        
+                        # Clean exclusion reason if included
+                        status_val = p.get("status", "PENDING")
+                        ex_reason = None if status_val == "INCLUDED" else p.get("exclusion_reason")
+                        
                         cursor.execute("""
                         INSERT OR REPLACE INTO papers (
                             id, project_id, title, authors, year, venue, abstract,
@@ -146,8 +154,8 @@ class Database:
                             relevance_notes, tool_model, dataset_name, sample_size_n,
                             metrics_evaluated, empirical_results, code_url, limitations,
                             ai_decision, ai_confidence, ai_rationale,
-                            duplicate_flag, duplicate_with_id, duplicate_reason, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            duplicate_flag, duplicate_with_id, duplicate_reason, duplicate_resolved, matched_ics, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             p_id,
                             project_id,
@@ -160,8 +168,8 @@ class Database:
                             p.get("url", ""),
                             p.get("source", "ArXiv"),
                             p.get("citations_count", 0),
-                            p.get("status", "PENDING"),
-                            p.get("exclusion_reason"),
+                            status_val,
+                            ex_reason,
                             p.get("relevance_notes"),
                             p.get("tool_model", "N/A"),
                             p.get("dataset_name", "N/A"),
@@ -176,6 +184,8 @@ class Database:
                             1 if p.get("duplicate_flag") else 0,
                             p.get("duplicate_with_id"),
                             p.get("duplicate_reason"),
+                            1 if p.get("duplicate_resolved") else 0,
+                            p.get("matched_ics"),
                             created_at
                         ))
                         inserted += 1
@@ -192,13 +202,17 @@ class Database:
         with cls.get_connection() as conn:
             cursor = conn.cursor()
             
+            clean_updates = dict(updates)
+            if clean_updates.get("status") == "INCLUDED" and "exclusion_reason" not in clean_updates:
+                clean_updates["exclusion_reason"] = None
+
             set_clauses = []
             values = []
-            for key, val in updates.items():
+            for key, val in clean_updates.items():
                 if key != "id":
                     set_clauses.append(f"{key} = ?")
                     # Handle boolean conversion
-                    if key == "duplicate_flag":
+                    if key in ["duplicate_flag", "duplicate_resolved"]:
                         values.append(1 if val else 0)
                     else:
                         values.append(val)
@@ -216,8 +230,18 @@ class Database:
             if row:
                 d = dict(row)
                 d["duplicate_flag"] = bool(d.get("duplicate_flag", 0))
+                d["duplicate_resolved"] = bool(d.get("duplicate_resolved", 0))
                 return d
             return None
+
+    @classmethod
+    def dismiss_duplicate(cls, paper_id: str, project_id: str = "default") -> Optional[Dict[str, Any]]:
+        return cls.update_paper(paper_id, {
+            "duplicate_flag": 0,
+            "duplicate_resolved": 1,
+            "duplicate_with_id": None,
+            "duplicate_reason": None
+        }, project_id=project_id)
 
     @classmethod
     def merge_two_papers(cls, keep_id: str, remove_id: str) -> Optional[Dict[str, Any]]:
@@ -240,11 +264,11 @@ class Database:
             url = p_keep.get("url") or p_remove.get("url")
             citations = max(p_keep.get("citations_count", 0), p_remove.get("citations_count", 0))
 
-            # Update keep_id paper
+            # Update keep_id paper as resolved
             cursor.execute("""
             UPDATE papers SET
                 abstract = ?, doi = ?, url = ?, citations_count = ?,
-                duplicate_flag = 0, duplicate_with_id = NULL, duplicate_reason = NULL
+                duplicate_flag = 0, duplicate_resolved = 1, duplicate_with_id = NULL, duplicate_reason = NULL
             WHERE id = ?
             """, (abstract, doi, url, citations, keep_id))
 
@@ -253,7 +277,13 @@ class Database:
             conn.commit()
 
             cursor.execute("SELECT * FROM papers WHERE id = ?", (keep_id,))
-            return dict(cursor.fetchone())
+            row = cursor.fetchone()
+            if row:
+                d = dict(row)
+                d["duplicate_flag"] = bool(d.get("duplicate_flag", 0))
+                d["duplicate_resolved"] = bool(d.get("duplicate_resolved", 0))
+                return d
+            return None
 
     @classmethod
     def delete_paper(cls, paper_id: str, project_id: str = "default") -> bool:

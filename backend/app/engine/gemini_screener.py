@@ -470,6 +470,10 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
                         update_data["exclusion_reason"] = exclusion_reason
                     elif decision == "INCLUDED":
                         update_data["status"] = "INCLUDED"
+                        update_data["exclusion_reason"] = None
+                        matched_arr = item.get("matched_criteria") or []
+                        if matched_arr:
+                            update_data["matched_ics"] = ", ".join(matched_arr)
 
                     try:
                         Database.update_paper(paper_id, update_data, project_id=project_id)

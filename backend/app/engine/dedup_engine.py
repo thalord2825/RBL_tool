@@ -59,7 +59,7 @@ class DeduplicationEngine:
             return 1.0
         # Fast length check heuristic: if lengths differ by >20%, similarity cannot be >= 0.88
         l1, l2 = len(norm1), len(norm2)
-        if abs(l1 - l2) / max(l1, l2) > 0.20:
+        if abs(l1 - l2) / max(l1, l2) > 0.25:
             return 0.0
         return SequenceMatcher(None, norm1, norm2).ratio()
 
@@ -91,25 +91,17 @@ class DeduplicationEngine:
                 if tokens:
                     author_set.add(cleaned)
                     author_set.add(tokens[-1])  # Surname token
-                    if len(tokens) > 1:
-                        author_set.add(tokens[0])  # Given name token
         return author_set
-
-    @classmethod
-    def check_author_overlap(cls, set_a: Set[str], set_b: Set[str]) -> Tuple[int, Set[str]]:
-        try:
-            meaningful_a = {a for a in set_a if len(a) >= 4}
-            meaningful_b = {b for b in set_b if len(b) >= 4}
-            common = meaningful_a.intersection(meaningful_b)
-            return len(common), common
-        except Exception:
-            return 0, set()
 
     @classmethod
     def flag_corpus_duplicates(cls, papers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        High-performance indexed scan of all papers in corpus (O(N) indexed rather than O(N^2) brute force).
-        Runs in < 0.05 seconds even for 1,000+ papers.
+        High-performance indexed scan of all papers in corpus.
+        STRICT RULES:
+        1. Exact Normalized DOI Match
+        2. High Title Similarity (>= 0.88)
+        3. 100% Identical Full Author Set + Title Similarity (>= 0.70)
+        (Respects duplicate_resolved flag so resolved/dismissed papers are never re-flagged).
         """
         if not papers:
             return []
@@ -117,54 +109,48 @@ class DeduplicationEngine:
         flagged_papers = [dict(p) for p in papers]
         n = len(flagged_papers)
 
-        # Precompute normalized features once per paper O(N)
         doi_list = []
         norm_title_list = []
         author_sets = []
-        years = []
         doi_index = defaultdict(list)
         title_word_index = defaultdict(list)
-        author_index = defaultdict(list)
 
         for i, p in enumerate(flagged_papers):
-            p["duplicate_flag"] = False
-            p["duplicate_with_id"] = None
-            p["duplicate_reason"] = None
+            # Only reset duplicate flags if not explicitly resolved by user
+            if not p.get("duplicate_resolved"):
+                p["duplicate_flag"] = False
+                p["duplicate_with_id"] = None
+                p["duplicate_reason"] = None
 
             d = cls.normalize_doi(p.get("doi"))
             doi_list.append(d)
-            if d:
+            if d and not p.get("duplicate_resolved"):
                 doi_index[d].append(i)
 
             t = cls.normalize_title(p.get("title"))
             norm_title_list.append(t)
-            # Index words with len >= 4 for candidate pruning
-            words = [w for w in t.split() if len(w) >= 4]
-            for w in set(words[:8]):
-                title_word_index[w].append(i)
+            if not p.get("duplicate_resolved"):
+                words = [w for w in t.split() if len(w) >= 4]
+                for w in set(words[:8]):
+                    title_word_index[w].append(i)
 
             a_set = cls.extract_author_set(p.get("authors"))
             author_sets.append(a_set)
-            for a in a_set:
-                if len(a) >= 4:
-                    author_index[a].append(i)
 
-            years.append(safe_year(p.get("year")))
-
-        # Check 1: Exact DOI Matches via Hash Map (O(1))
+        # Rule 1: Exact DOI Matches via Hash Map (O(1))
         for d, indices in doi_index.items():
             if len(indices) > 1:
                 first_id = flagged_papers[indices[0]].get("id")
                 for idx in indices:
+                    if flagged_papers[idx].get("duplicate_resolved"):
+                        continue
                     other_idx = indices[0] if idx != indices[0] else indices[1]
                     flagged_papers[idx]["duplicate_flag"] = True
                     flagged_papers[idx]["duplicate_with_id"] = flagged_papers[other_idx].get("id")
                     flagged_papers[idx]["duplicate_reason"] = f"Identical DOI ({d}) with {flagged_papers[other_idx].get('id')}"
 
-        # Candidate pair generation for fuzzy similarity
+        # Candidate pair generation from shared title keywords
         compared_pairs = set()
-
-        # Generate candidates from shared title keywords
         for w, indices in title_word_index.items():
             if len(indices) > 1:
                 for i_pos in range(len(indices)):
@@ -173,30 +159,22 @@ class DeduplicationEngine:
                         pair = (idx1, idx2) if idx1 < idx2 else (idx2, idx1)
                         compared_pairs.add(pair)
 
-        # Generate candidates from shared authors
-        for a, indices in author_index.items():
-            if len(indices) > 1:
-                for i_pos in range(len(indices)):
-                    for j_pos in range(i_pos + 1, min(i_pos + 10, len(indices))):
-                        idx1, idx2 = indices[i_pos], indices[j_pos]
-                        pair = (idx1, idx2) if idx1 < idx2 else (idx2, idx1)
-                        compared_pairs.add(pair)
-
-        # Evaluate candidate pairs only
+        # Evaluate candidate pairs
         for (i, j) in compared_pairs:
             p1 = flagged_papers[i]
             p2 = flagged_papers[j]
 
-            # If already flagged by DOI, continue
+            if p1.get("duplicate_resolved") or p2.get("duplicate_resolved"):
+                continue
+
             if p1.get("duplicate_flag") and p2.get("duplicate_flag"):
                 continue
 
             t1 = norm_title_list[i]
             t2 = norm_title_list[j]
-
             t_sim = cls.title_similarity(t1, t2)
 
-            # High Title Similarity (>= 0.88)
+            # Rule 2: High Title Similarity (>= 0.88)
             if t_sim >= 0.88:
                 if not p1.get("duplicate_flag"):
                     p1["duplicate_flag"] = True
@@ -208,22 +186,19 @@ class DeduplicationEngine:
                     p2["duplicate_reason"] = f"High Title Similarity ({int(t_sim*100)}%) with {p1.get('id')}"
                 continue
 
-            # Author Overlap Rule
-            overlap_count, common_authors = cls.check_author_overlap(author_sets[i], author_sets[j])
-            y1 = years[i]
-            y2 = years[j]
-            year_diff = abs(y1 - y2)
-
-            if overlap_count >= 2:
-                if t_sim >= 0.60 or year_diff <= 1:
+            # Rule 3: 100% Identical Full Author Set + Title Similarity >= 0.70
+            set1 = author_sets[i]
+            set2 = author_sets[j]
+            if set1 and set2 and set1 == set2 and len(set1) >= 2:
+                if t_sim >= 0.70:
                     if not p1.get("duplicate_flag"):
                         p1["duplicate_flag"] = True
                         p1["duplicate_with_id"] = p2.get("id")
-                        p1["duplicate_reason"] = f"Author Overlap ({overlap_count} matches: {', '.join(list(common_authors)[:2])}) with {p2.get('id')}"
+                        p1["duplicate_reason"] = f"Identical Authors + Similar Title ({int(t_sim*100)}%) with {p2.get('id')}"
                     if not p2.get("duplicate_flag"):
                         p2["duplicate_flag"] = True
                         p2["duplicate_with_id"] = p1.get("id")
-                        p2["duplicate_reason"] = f"Author Overlap ({overlap_count} matches: {', '.join(list(common_authors)[:2])}) with {p1.get('id')}"
+                        p2["duplicate_reason"] = f"Identical Authors + Similar Title ({int(t_sim*100)}%) with {p1.get('id')}"
 
         return flagged_papers
 
@@ -235,7 +210,6 @@ class DeduplicationEngine:
     ) -> Tuple[bool, Optional[str], Optional[str]]:
         """
         Fast O(N) duplicate check for a newly added single paper. Runs in < 0.002s.
-        Returns: (is_duplicate, duplicate_with_id, duplicate_reason)
         """
         if not existing_papers:
             return False, None, None
@@ -243,28 +217,27 @@ class DeduplicationEngine:
         new_doi = cls.normalize_doi(new_paper.get("doi"))
         new_title = cls.normalize_title(new_paper.get("title"))
         new_authors = cls.extract_author_set(new_paper.get("authors"))
-        new_year = safe_year(new_paper.get("year"))
 
         for p in existing_papers:
-            # 1. DOI
+            if p.get("duplicate_resolved"):
+                continue
+
+            # 1. Exact DOI
             t_doi = cls.normalize_doi(p.get("doi"))
             if new_doi and t_doi and new_doi == t_doi:
                 return True, p.get("id"), f"Identical DOI ({new_doi}) with {p.get('id')}"
 
-            # 2. Title
+            # 2. Title Similarity
             t_title = cls.normalize_title(p.get("title"))
             t_sim = cls.title_similarity(new_title, t_title)
             if t_sim >= 0.88:
                 return True, p.get("id"), f"High Title Similarity ({int(t_sim*100)}%) with {p.get('id')}"
 
-            # 3. Authors
+            # 3. 100% Identical Full Author Set + Title Similarity >= 0.70
             t_authors = cls.extract_author_set(p.get("authors"))
-            overlap_count, common_authors = cls.check_author_overlap(new_authors, t_authors)
-            t_year = safe_year(p.get("year"))
-            year_diff = abs(new_year - t_year)
-
-            if overlap_count >= 2 and (t_sim >= 0.60 or year_diff <= 1):
-                return True, p.get("id"), f"Author Overlap ({overlap_count} matches) with {p.get('id')}"
+            if new_authors and t_authors and new_authors == t_authors and len(new_authors) >= 2:
+                if t_sim >= 0.70:
+                    return True, p.get("id"), f"Identical Authors + Similar Title ({int(t_sim*100)}%) with {p.get('id')}"
 
         return False, None, None
 
@@ -316,17 +289,20 @@ class DeduplicationEngine:
             try:
                 incoming_doi = cls.normalize_doi(incoming.get("doi"))
                 incoming_title = cls.normalize_title(incoming.get("title"))
+                incoming_authors = cls.extract_author_set(incoming.get("authors"))
                 is_dup = False
 
                 for i, target in enumerate(retained):
                     target_doi = cls.normalize_doi(target.get("doi"))
 
+                    # 1. Exact DOI
                     if incoming_doi and target_doi and incoming_doi == target_doi:
                         is_dup = True
                         retained[i] = cls.merge_records(target, incoming)
                         duplicates_count += 1
                         break
 
+                    # 2. Title Sim >= 0.88
                     target_title = cls.normalize_title(target.get("title"))
                     sim = cls.title_similarity(incoming_title, target_title)
                     if sim >= similarity_threshold:
@@ -334,6 +310,15 @@ class DeduplicationEngine:
                         retained[i] = cls.merge_records(target, incoming)
                         duplicates_count += 1
                         break
+
+                    # 3. 100% Identical Authors + Title Sim >= 0.70
+                    target_authors = cls.extract_author_set(target.get("authors"))
+                    if incoming_authors and target_authors and incoming_authors == target_authors and len(incoming_authors) >= 2:
+                        if sim >= 0.70:
+                            is_dup = True
+                            retained[i] = cls.merge_records(target, incoming)
+                            duplicates_count += 1
+                            break
 
                 if not is_dup:
                     unique_new.append(incoming)

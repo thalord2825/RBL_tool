@@ -1074,22 +1074,28 @@ export default function EvidenceTable({
                           </select>
 
                           {/* Compact Clickable AI Decision Pill */}
-                          {paper.ai_decision && (
+                          {(paper.ai_decision || isIncluded || isExcluded) && (
                             <div 
                               onClick={() => setSelectedRationalePaper(paper)}
-                              className="border border-[#C8C1AE] bg-[#FDFCF9] hover:bg-[#F4F1EA] hover:border-[#D94E28] p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded"
+                              className={`border p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded ${
+                                isIncluded
+                                  ? 'border-[#98D4A5] bg-[#F4F9F5] hover:bg-[#EAF5EC]'
+                                  : isExcluded
+                                  ? 'border-[#F5B7B1] bg-[#FDF4F4] hover:bg-[#FAEAEA]'
+                                  : 'border-[#C8C1AE] bg-[#FDFCF9] hover:bg-[#F4F1EA]'
+                              }`}
                               title="Click to view full AI scientific rationale & criteria details"
                             >
                               <div className="flex items-center justify-between gap-1">
                                 <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border rounded ${
-                                  paper.ai_decision === 'INCLUDED'
+                                  isIncluded
                                     ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
-                                    : paper.ai_decision === 'EXCLUDED'
+                                    : isExcluded
                                     ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
                                     : 'bg-[#E9D8FD] text-[#805AD5] border-[#D6BCFA]'
                                 }`}>
                                   <Sparkles className="w-2.5 h-2.5" />
-                                  <span>{paper.ai_decision}</span>
+                                  <span>{isIncluded ? 'INCLUDED' : isExcluded ? 'EXCLUDED' : paper.ai_decision}</span>
                                 </span>
 
                                 <span className="text-[#7A766F] font-bold">
@@ -1097,8 +1103,19 @@ export default function EvidenceTable({
                                 </span>
                               </div>
 
-                              {paper.exclusion_reason && (
-                                <div className="text-[#C93B2B] truncate pt-1 font-semibold border-t border-[#EDE9DF] mt-1">
+                              {/* Matched ICs badge for INCLUDED papers */}
+                              {isIncluded && (
+                                <div className="text-[#2D7A53] truncate pt-1 font-semibold border-t border-[#D4EBD9] mt-1 flex items-center gap-1">
+                                  <CheckCircle2 className="w-2.5 h-2.5 text-[#2D7A53] shrink-0" />
+                                  <span className="truncate">
+                                    {paper.matched_ics ? `Matched: ${paper.matched_ics}` : 'Eligible under PICO'}
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Exclusion reason ONLY for EXCLUDED papers (NEVER show for INCLUDED papers!) */}
+                              {!isIncluded && isExcluded && paper.exclusion_reason && (
+                                <div className="text-[#C93B2B] truncate pt-1 font-semibold border-t border-[#F5B7B1] mt-1">
                                   {paper.exclusion_reason}
                                 </div>
                               )}

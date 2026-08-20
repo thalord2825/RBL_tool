@@ -156,13 +156,25 @@ export default function AiRationaleModal({
           </div>
 
           {/* Matched Criteria Section */}
-          {paper.exclusion_reason && (
+          {isIncluded && (
+            <div className="space-y-1.5">
+              <div className="text-[10px] text-[#2D7A53] uppercase font-bold flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#2D7A53]" />
+                <span>Matched Inclusion Criteria (PICO / IC):</span>
+              </div>
+              <div className="bg-[#EAF5EC] border-2 border-[#98D4A5] text-[#2D7A53] p-3 text-xs font-bold leading-relaxed rounded">
+                {paper.matched_ics ? `Criteria Satisfied: ${paper.matched_ics}` : 'Passes all mandatory PICO framework and empirical evaluation criteria.'}
+              </div>
+            </div>
+          )}
+
+          {!isIncluded && isExcluded && paper.exclusion_reason && (
             <div className="space-y-1.5">
               <div className="text-[10px] text-[#7A766F] uppercase font-bold flex items-center gap-1">
                 <ShieldAlert className="w-3.5 h-3.5 text-[#C93B2B]" />
                 <span>Matched Exclusion Criteria:</span>
               </div>
-              <div className="bg-[#FDF2F2] border-2 border-[#F5B7B1] text-[#C93B2B] p-3 text-xs font-bold leading-relaxed">
+              <div className="bg-[#FDF2F2] border-2 border-[#F5B7B1] text-[#C93B2B] p-3 text-xs font-bold leading-relaxed rounded">
                 {paper.exclusion_reason}
               </div>
             </div>
