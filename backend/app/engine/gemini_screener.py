@@ -498,3 +498,125 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         final_papers = Database.get_all_papers(project_id)
         total_dur = round(time.time() - start_time, 2)
         yield f"data: {json.dumps({'event': 'complete', 'total': total_papers, 'evaluated': evaluated_count, 'stats': stats, 'duration_seconds': total_dur, 'papers': final_papers})}\n\n"
+
+    @classmethod
+    def extract_evidence_single_paper(
+        cls,
+        paper: Dict[str, Any],
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Uses Gemini to extract empirical evidence across the 7-column SLR matrix adhering strictly to Zero Data Fabrication.
+        """
+        gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        if not gemini_key:
+            raise ValueError("Gemini API key is required for automated evidence extraction.")
+
+        available_models = cls.get_available_models(gemini_key)
+        candidates_to_try = []
+        if model_name:
+            candidates_to_try.append(model_name)
+        candidates_to_try.extend([m for m in available_models if m not in candidates_to_try])
+        if not candidates_to_try:
+            candidates_to_try = VALID_DEFAULT_MODELS
+
+        title = paper.get("title", "")
+        abstract = paper.get("abstract", "")
+        authors = paper.get("authors", "")
+        year = paper.get("year", 2024)
+        venue = paper.get("venue", "")
+
+        system_instruction = """
+You are an expert Systematic Literature Review (SLR) Evidence Synthesizer operating under strict PRISMA guidelines and the Zero Data Fabrication Policy.
+Your task is to extract empirical research evidence from the provided academic paper abstract into a standardized 7-column evidence matrix.
+
+STRICT ZERO FABRICATION POLICY:
+- Extract ONLY what is explicitly stated in the paper title and abstract.
+- If a metric, sample size, or code repository is not mentioned, YOU MUST SET THAT FIELD TO "N/A".
+- Never speculate, hallucinate, or fabricate numbers.
+
+REQUIRED JSON OUTPUT FORMAT:
+{
+  "tool_model": "Exact model architectures/methods evaluated (e.g., PhoBERT-base, GPT-4, BiGRU+WBCE, RoBERTa). If none specified, 'N/A'.",
+  "dataset_name": "Name of the dataset and domain context (e.g., Vietnamese SMS Spam Dataset, Zalo Phishing Messages). If none specified, 'N/A'.",
+  "sample_size_n": "Sample size N (e.g., N = 11,200 SMS messages). If none specified, 'N/A'.",
+  "metrics_evaluated": "Evaluation metrics used (e.g., Macro-F1, Precision, Recall, Accuracy, Latency). If none specified, 'N/A'.",
+  "empirical_results": "Exact numerical performance results achieved (e.g., PhoBERT: F1=0.941, Acc=96.2%; GPT-4: F1=0.915). If none specified, 'N/A'.",
+  "code_url": "Official GitHub/GitLab/HuggingFace URL if mentioned in text, otherwise 'N/A'.",
+  "limitations": "Threats to validity, limitations, or constraints mentioned by authors. If none specified, 'N/A'."
+}
+"""
+
+        user_content = f"""
+PAPER DETAILS:
+Title: {title}
+Authors: {authors} ({year})
+Venue: {venue}
+Abstract: {abstract}
+"""
+
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [
+                {"role": "user", "parts": [{"text": f"{system_instruction}\n\n{user_content}"}]}
+            ],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.1,
+                "topP": 0.95
+            }
+        }
+
+        for model_id in candidates_to_try:
+            is_cool, _ = cls.is_model_cooling_down(model_id)
+            if is_cool and len(candidates_to_try) > 1:
+                continue
+
+            for api_ver in ["v1beta", "v1"]:
+                url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
+                try:
+                    response = requests.post(url, headers=headers, json=payload, timeout=20)
+                    if response.status_code == 200:
+                        result_json = response.json()
+                        candidates = result_json.get("candidates", [])
+                        if not candidates:
+                            continue
+
+                        raw_text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "{}")
+                        cleaned_text = raw_text.strip()
+                        if cleaned_text.startswith("```json"):
+                            cleaned_text = cleaned_text[7:]
+                        if cleaned_text.startswith("```"):
+                            cleaned_text = cleaned_text[3:]
+                        if cleaned_text.endswith("```"):
+                            cleaned_text = cleaned_text[:-3]
+                        cleaned_text = cleaned_text.strip()
+
+                        data = json.loads(cleaned_text)
+                        return {
+                            "tool_model": data.get("tool_model") or "N/A",
+                            "dataset_name": data.get("dataset_name") or "N/A",
+                            "sample_size_n": data.get("sample_size_n") or "N/A",
+                            "metrics_evaluated": data.get("metrics_evaluated") or "N/A",
+                            "empirical_results": data.get("empirical_results") or "N/A",
+                            "code_url": data.get("code_url") or "N/A",
+                            "limitations": data.get("limitations") or "N/A",
+                            "extracted_by_model": model_id
+                        }
+                    elif response.status_code == 429:
+                        cls.set_model_cooldown(model_id, 60.0)
+                        break
+                except Exception as e:
+                    logger.warning(f"Evidence extraction try failed on {model_id} ({api_ver}): {e}")
+
+        return {
+            "tool_model": "N/A",
+            "dataset_name": "N/A",
+            "sample_size_n": "N/A",
+            "metrics_evaluated": "N/A",
+            "empirical_results": "N/A",
+            "code_url": "N/A",
+            "limitations": "N/A",
+            "extracted_by_model": "None"
+        }

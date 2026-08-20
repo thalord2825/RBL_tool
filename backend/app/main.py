@@ -22,7 +22,8 @@ from .schemas import (
     BulkFetchAbstractsRequest,
     UpdateAbstractRequest,
     FetchMetadataRequest,
-    AddManualPaperRequest
+    AddManualPaperRequest,
+    ExtractEvidenceRequest
 )
 from .database import Database
 from .crawlers import (
@@ -745,6 +746,38 @@ def add_manual_paper(req: AddManualPaperRequest):
         "total_count": len(updated_corpus),
         "papers": updated_corpus
     }
+
+@app.post("/api/papers/extract-evidence")
+def extract_paper_evidence(req: ExtractEvidenceRequest):
+    """
+    Uses Gemini to extract empirical evidence across the 7-column matrix for a single paper.
+    """
+    if not req.abstract or req.abstract.strip() in ["", "N/A"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Paper abstract is empty. Please ensure an abstract is available before AI evidence extraction."
+        )
+    try:
+        evidence = GeminiScreener.extract_evidence_single_paper(
+            paper={
+                "id": req.paper_id,
+                "title": req.title,
+                "abstract": req.abstract,
+                "authors": req.authors,
+                "year": req.year,
+                "venue": req.venue
+            },
+            api_key=req.api_key,
+            model_name=req.model_name
+        )
+        return {
+            "status": "success",
+            "evidence": evidence
+        }
+    except Exception as e:
+        logger.error(f"Evidence extraction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

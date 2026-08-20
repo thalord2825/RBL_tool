@@ -154,9 +154,21 @@ class AddManualPaperRequest(BaseModel):
     project_id: str = "default"
     paper: ManualPaperItem
 
+class ExtractEvidenceRequest(BaseModel):
+    paper_id: Optional[str] = None
+    title: str
+    abstract: str
+    authors: Optional[str] = ""
+    year: Optional[int] = 2024
+    venue: Optional[str] = ""
+    api_key: Optional[str] = None
+    model_name: Optional[str] = None
+    project_id: str = "default"
+
 ManualPaperItem.model_rebuild()
 AddManualPaperRequest.model_rebuild()
 FetchMetadataRequest.model_rebuild()
+ExtractEvidenceRequest.model_rebuild()
 
 
 

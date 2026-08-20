@@ -376,6 +376,22 @@ export const apiClient = {
     });
     return res.data;
   },
+
+  // Empirical Evidence Auto-Extraction with Gemini
+  extractEvidence: async ({ paperId, title, abstract, authors = '', year = 2024, venue = '', apiKey, modelName = 'auto', projectId = 'default' }) => {
+    const res = await api.post('/papers/extract-evidence', {
+      paper_id: paperId,
+      title,
+      abstract,
+      authors,
+      year,
+      venue,
+      api_key: apiKey,
+      model_name: modelName,
+      project_id: projectId,
+    });
+    return res.data;
+  },
 };
 
 export default apiClient;

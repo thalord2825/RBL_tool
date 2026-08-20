@@ -43,6 +43,15 @@ export default function AddPaperManualModal({
   const [citationsCount, setCitationsCount] = useState(0);
   const [status, setStatus] = useState('PENDING');
 
+  // Reset loading state and clear stale error on open
+  React.useEffect(() => {
+    if (isOpen) {
+      setIsSaving(false);
+      setIsFetching(false);
+      setFetchError(null);
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const handlePasteClipboard = async () => {
@@ -142,10 +151,12 @@ export default function AddPaperManualModal({
         if (onPaperAdded) {
           onPaperAdded(res.paper, res.papers, res.is_duplicate);
         }
+        handleResetForm();
         onClose();
       }
     } catch (err) {
       setFetchError(err.response?.data?.detail || err.message || 'Failed to save paper to database.');
+    } finally {
       setIsSaving(false);
     }
   };

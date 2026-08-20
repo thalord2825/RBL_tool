@@ -834,6 +834,7 @@ export default function App() {
         onClose={() => setExtractingPaper(null)}
         paper={extractingPaper}
         onSaveExtraction={handleSaveExtraction}
+        addToast={addToast}
       />
 
       {/* Gemini AI Auto-Screen Configuration Modal (4-Tier Contextual Scope Selector) */}

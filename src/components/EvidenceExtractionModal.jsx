@@ -1,21 +1,114 @@
-import React, { useState } from 'react';
-import { X, Save, FileText, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Save, FileText, ExternalLink, Sparkles, Loader2, RotateCcw, AlertCircle, CheckCircle2 } from 'lucide-react';
+import apiClient, { getStoredGeminiApiKey } from '../services/apiClient';
 
-export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSaveExtraction }) {
+export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSaveExtraction, addToast }) {
   const [formData, setFormData] = useState({
-    tool_model: paper?.tool_model || 'N/A',
-    dataset_name: paper?.dataset_name || 'N/A',
-    sample_size_n: paper?.sample_size_n || 'N/A',
-    metrics_evaluated: paper?.metrics_evaluated || 'N/A',
-    empirical_results: paper?.empirical_results || 'N/A',
-    code_url: paper?.code_url || 'N/A',
-    limitations: paper?.limitations || 'N/A',
+    tool_model: 'N/A',
+    dataset_name: 'N/A',
+    sample_size_n: 'N/A',
+    metrics_evaluated: 'N/A',
+    empirical_results: 'N/A',
+    code_url: 'N/A',
+    limitations: 'N/A',
   });
+
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [extractError, setExtractError] = useState(null);
+  const [extractSuccess, setExtractSuccess] = useState(null);
+
+  useEffect(() => {
+    if (paper) {
+      setFormData({
+        tool_model: paper?.tool_model || 'N/A',
+        dataset_name: paper?.dataset_name || 'N/A',
+        sample_size_n: paper?.sample_size_n || 'N/A',
+        metrics_evaluated: paper?.metrics_evaluated || 'N/A',
+        empirical_results: paper?.empirical_results || 'N/A',
+        code_url: paper?.code_url || 'N/A',
+        limitations: paper?.limitations || 'N/A',
+      });
+      setExtractError(null);
+      setExtractSuccess(null);
+      setIsExtracting(false);
+    }
+  }, [paper, isOpen]);
 
   if (!isOpen || !paper) return null;
 
   const handleChange = (field, val) => {
     setFormData(prev => ({ ...prev, [field]: val }));
+  };
+
+  const handleResetToNA = () => {
+    setFormData({
+      tool_model: 'N/A',
+      dataset_name: 'N/A',
+      sample_size_n: 'N/A',
+      metrics_evaluated: 'N/A',
+      empirical_results: 'N/A',
+      code_url: 'N/A',
+      limitations: 'N/A',
+    });
+    setExtractSuccess('Reset all fields to "N/A" according to Zero Fabrication Policy.');
+  };
+
+  const handleAiExtract = async () => {
+    if (!paper.abstract || paper.abstract.trim() === '' || paper.abstract === 'N/A') {
+      setExtractError('Abstract is missing or "N/A". Please fetch or write the abstract before running AI extraction.');
+      return;
+    }
+
+    setIsExtracting(true);
+    setExtractError(null);
+    setExtractSuccess(null);
+
+    try {
+      const apiKey = getStoredGeminiApiKey();
+      const res = await apiClient.extractEvidence({
+        paperId: paper.id,
+        title: paper.title,
+        abstract: paper.abstract,
+        authors: paper.authors,
+        year: paper.year,
+        venue: paper.venue,
+        apiKey,
+      });
+
+      if (res && res.status === 'success' && res.evidence) {
+        setFormData({
+          tool_model: res.evidence.tool_model || 'N/A',
+          dataset_name: res.evidence.dataset_name || 'N/A',
+          sample_size_n: res.evidence.sample_size_n || 'N/A',
+          metrics_evaluated: res.evidence.metrics_evaluated || 'N/A',
+          empirical_results: res.evidence.empirical_results || 'N/A',
+          code_url: res.evidence.code_url || 'N/A',
+          limitations: res.evidence.limitations || 'N/A',
+        });
+        const modelUsed = res.evidence.extracted_by_model || 'Gemini';
+        setExtractSuccess(`Evidence successfully extracted via ${modelUsed}! Review numbers before saving.`);
+        if (addToast) {
+          addToast({
+            type: 'success',
+            title: 'Evidence Auto-Extracted',
+            message: `Synthesized 7-column evidence matrix for [${paper.id || 'Paper'}] using ${modelUsed}.`
+          });
+        }
+      } else {
+        setExtractError('AI extraction returned empty response. You can continue with manual entry.');
+      }
+    } catch (err) {
+      setExtractError(err.response?.data?.detail || err.message || 'AI evidence extraction failed.');
+      if (addToast) {
+        addToast({
+          type: 'error',
+          title: 'Extraction Error',
+          message: err.response?.data?.detail || err.message || 'AI evidence extraction failed.'
+        });
+      }
+    } finally {
+      setIsExtracting(false);
+    }
   };
 
   const handleSubmit = (e) => {
@@ -26,7 +119,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4 font-sans select-none overflow-y-auto">
-      <div className="bg-[#F4F1EA] border-2 border-[#1A1917] max-w-2xl w-full shadow-[8px_8px_0px_0px_rgba(26,25,23,0.8)] overflow-hidden my-8">
+      <div className="bg-[#F4F1EA] border-2 border-[#1A1917] max-w-2xl w-full shadow-[8px_8px_0px_0px_rgba(26,25,23,0.8)] overflow-hidden my-8 animate-in fade-in duration-150">
         
         {/* Header */}
         <div className="bg-[#EDE9DF] px-6 py-3 border-b border-[#DCD6C5] flex items-center justify-between">
@@ -66,14 +159,51 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
             )}
           </div>
           <div className="text-[10px] text-[#7A766F] mt-1">
-            {paper.authors} ({paper.year}) • <span className="italic">{paper.venue}</span>
+            {paper.authors} ({paper.year}) • <span className="italic">{paper.venue || 'Academic Publication'}</span>
           </div>
         </div>
 
-        {/* Zero Data Fabrication Warning Banner */}
-        <div className="bg-[#FEF3C7] px-6 py-2 border-b border-[#FDE68A] font-mono text-[10px] text-[#B8860B] font-bold uppercase">
-          Zero Fabrication Policy: If paper omits any metric, leave field as "N/A".
+        {/* AI Action & Zero Data Fabrication Warning Banner */}
+        <div className="bg-[#FEF3C7] px-6 py-2.5 border-b border-[#FDE68A] flex items-center justify-between gap-3 font-mono">
+          <div className="text-[10px] text-[#B8860B] font-bold uppercase tracking-tight">
+            Zero Fabrication Policy: If paper omits any metric, leave field as "N/A".
+          </div>
+
+          <button
+            type="button"
+            onClick={handleAiExtract}
+            disabled={isExtracting}
+            className="bg-[#1A1917] hover:bg-[#2D7A53] text-[#F4F1EA] text-[11px] font-bold px-3 py-1 flex items-center gap-1.5 shadow-sm transition-colors disabled:opacity-50 shrink-0 cursor-pointer"
+            title="Auto-extract all 7 matrix fields from abstract with Gemini LLM"
+          >
+            {isExtracting ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D94E28]" />
+                <span>Extracting...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3.5 h-3.5 text-[#F59E0B]" />
+                <span>AI Auto-Extract</span>
+              </>
+            )}
+          </button>
         </div>
+
+        {/* Status Alerts */}
+        {extractSuccess && (
+          <div className="px-6 py-2 bg-[#E6F4EA] text-[#1E7E34] text-xs font-mono border-b border-[#C3E6CB] flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{extractSuccess}</span>
+          </div>
+        )}
+
+        {extractError && (
+          <div className="px-6 py-2 bg-[#FDE8E8] text-[#C93B2B] text-xs font-mono border-b border-[#F8B4B4] flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{extractError}</span>
+          </div>
+        )}
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4 font-mono text-xs">
@@ -88,7 +218,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
               value={formData.tool_model}
               onChange={(e) => handleChange('tool_model', e.target.value)}
               className="w-full bg-[#F8F6F0] border border-[#C8C1AE] p-2 text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28]"
-              placeholder="e.g. PhoBERT-base, GPT-4o-mini (Few-Shot), ViDeBERTa"
+              placeholder="e.g. PhoBERT-base, GPT-4o-mini (Few-Shot), BiGRU + WBCE"
             />
           </div>
 
@@ -103,7 +233,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
                 value={formData.dataset_name}
                 onChange={(e) => handleChange('dataset_name', e.target.value)}
                 className="w-full bg-[#F8F6F0] border border-[#C8C1AE] p-2 text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28]"
-                placeholder="e.g. ViSFD (Vietnamese Facebook Spam)"
+                placeholder="e.g. Vietnamese SMS/Zalo Spam Corpus"
               />
             </div>
 
@@ -116,7 +246,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
                 value={formData.sample_size_n}
                 onChange={(e) => handleChange('sample_size_n', e.target.value)}
                 className="w-full bg-[#F8F6F0] border border-[#C8C1AE] p-2 text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28]"
-                placeholder="e.g. N = 2,540 messages"
+                placeholder="e.g. N = 11,200 messages"
               />
             </div>
           </div>
@@ -145,7 +275,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
                 value={formData.empirical_results}
                 onChange={(e) => handleChange('empirical_results', e.target.value)}
                 className="w-full bg-[#F8F6F0] border border-[#C8C1AE] p-2 text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28]"
-                placeholder="e.g. PhoBERT: F1=94.1%, GPT-4o: F1=91.5%"
+                placeholder="e.g. PhoBERT: F1=94.1%, GPT-4: F1=91.5%"
               />
             </div>
           </div>
@@ -174,26 +304,37 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
               onChange={(e) => handleChange('limitations', e.target.value)}
               rows={2}
               className="w-full bg-[#F8F6F0] border border-[#C8C1AE] p-2 text-xs text-[#1A1917] focus:outline-none focus:border-[#D94E28]"
-              placeholder="e.g. Evaluated only on clean text; does not benchmark Vietnamese teencode variants"
+              placeholder="e.g. Evaluated only on clean text; does not benchmark teencode variants"
             />
           </div>
 
           {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#DCD6C5]">
+          <div className="flex items-center justify-between gap-3 pt-4 border-t border-[#DCD6C5]">
             <button
               type="button"
-              onClick={onClose}
-              className="btn-editorial-outline"
+              onClick={handleResetToNA}
+              className="text-[#7A766F] hover:text-[#C93B2B] flex items-center gap-1 text-[11px] font-bold hover:underline transition-colors"
             >
-              Cancel
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset to N/A</span>
             </button>
-            <button
-              type="submit"
-              className="btn-editorial bg-[#2D7A53] hover:bg-[#236142] py-2.5 px-6 font-bold flex items-center gap-2 text-white"
-            >
-              <Save className="w-4 h-4" />
-              <span>Save Evidence Entry</span>
-            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="btn-editorial-outline"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn-editorial bg-[#2D7A53] hover:bg-[#236142] py-2.5 px-6 font-bold flex items-center gap-2 text-white shadow-sm cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>Save Evidence Entry</span>
+              </button>
+            </div>
           </div>
 
         </form>
@@ -202,3 +343,4 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
     </div>
   );
 }
+
