@@ -88,7 +88,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (parsed.pico && parsed.pico.P && !parsed.pico.P.includes('financial scam message text lures')) return parsed.pico;
+        if (parsed.pico && parsed.pico.I && parsed.pico.I.includes('Deep Learning')) return parsed.pico;
       } catch (e) {}
     }
     return DEFAULT_PICO;
@@ -99,7 +99,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed.icList) && parsed.icList.length > 0 && !parsed.icList[0].includes('bug reports')) {
+        if (Array.isArray(parsed.icList) && parsed.icList.length > 0 && JSON.stringify(parsed.icList).includes('BiGRU')) {
           return parsed.icList;
         }
       } catch (e) {}
@@ -112,7 +112,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed.ecList) && parsed.ecList.length > 0 && !parsed.ecList[0].includes('bug reports')) {
+        if (Array.isArray(parsed.ecList) && parsed.ecList.length > 0 && JSON.stringify(parsed.ecList).includes('Deep Learning')) {
           return parsed.ecList;
         }
       } catch (e) {}
@@ -125,18 +125,18 @@ export default function App() {
   const [currentFilterStage, setCurrentFilterStage] = useState('ALL');
   const [filteredPaperIds, setFilteredPaperIds] = useState([]);
 
-  // Git Settings (Persisted in localStorage)
+  // Git Configuration State with LocalStorage Persistence
   const [gitSettings, setGitSettings] = useState(() => {
     const saved = localStorage.getItem('rbl_git_settings');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
     }
     return {
-      repoOwner: 'QuangWorkIT',
+      repoOwner: 'thalord2825',
       repoName: 'RBL_ScamShield',
       branch: 'main',
-      memberPath: 'trung_hieu/SLR/',
-      commitPrefix: '[SLR]',
       authorName: 'Nguyen Trung Hieu',
       githubToken: ''
     };
@@ -164,13 +164,25 @@ export default function App() {
   const fetchProtocol = async () => {
     try {
       const res = await apiClient.getProtocol('default');
-      if (res && res.pico && Object.keys(res.pico).length > 0) {
+      if (res && res.pico && Object.keys(res.pico).length > 0 && res.ic_list && JSON.stringify(res.ic_list).includes('BiGRU')) {
         setPico(res.pico);
-        if (res.ic_list?.length > 0) setIcList(res.ic_list);
+        setIcList(res.ic_list);
         if (res.ec_list?.length > 0) setEcList(res.ec_list);
+        localStorage.setItem('rbl_research_protocol', JSON.stringify({
+          pico: res.pico,
+          icList: res.ic_list,
+          ecList: res.ec_list
+        }));
+      } else {
+        // Automatically migrate to new Deep Learning & Edge AI protocol
+        handleSaveProtocol({
+          pico: DEFAULT_PICO,
+          icList: DEFAULT_IC_LIST,
+          ecList: DEFAULT_EC_LIST
+        });
       }
     } catch (err) {
-      console.warn('Could not sync protocol from server, using local storage.');
+      console.warn('Could not sync protocol from server, using defaults.');
     }
   };
 

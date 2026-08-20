@@ -109,6 +109,43 @@ class Database:
                 created_at TEXT
             )
             """)
+
+            # Protocol Migration: If existing protocol in DB is outdated (pre-BiGRU), update to new Deep Learning & Edge AI protocol
+            cursor.execute("SELECT ic_list FROM research_protocols WHERE project_id = 'default'")
+            row_p = cursor.fetchone()
+            if row_p:
+                ic_str = row_p["ic_list"] or ""
+                if "BiGRU" not in ic_str:
+                    default_pico = {
+                        "P": "Scam messages (SMS, Zalo, Messenger, Email) and fraudulent conversational scripts targeting users, particularly within Vietnamese language context and transferable Southeast Asian / international mobile threat scenarios.",
+                        "I": "Text classification based on Deep Learning architectures (BiGRU, BiLSTM, CNN, Attention), Pre-trained Language Models (PhoBERT, BERT, RoBERTa), or Large Language Models (LLMs via prompting / fine-tuning) integrated into software systems.",
+                        "C": "Traditional lightweight baselines (TF-IDF, Naive Bayes, Logistic Regression), static blacklists/rules, or comparison among different Deep Learning / PLM / LLM architectures.",
+                        "O": "Classification performance (Accuracy, Precision, Recall, Macro-F1, Average Precision), inference latency, computational resource footprint (model size/edge feasibility), and operational cost."
+                    }
+                    default_ic = [
+                        "IC1: Studies focusing on the detection and classification of spam messages, scam messages (phishing/smishing), or conversational fraud text.",
+                        "IC2: Papers that apply, evaluate, or compare Deep Learning models (BiGRU, BiLSTM, CNN-LSTM, Attention, Edge-AI), Pre-trained Language Models (PLMs), or Large Language Models (LLMs) for text classification.",
+                        "IC3: Studies providing clear empirical results with quantitative metrics such as Accuracy, Precision, Recall, F1-score, latency, memory footprint, or operational cost.",
+                        "IC4: Papers discussing system architecture, edge/mobile deployment feasibility, real-world platforms (web/mobile apps), or community alert mechanisms.",
+                        "IC5: Studies published from 2020 onwards."
+                    ]
+                    default_ec = [
+                        "EC1: Studies focusing solely on binary malware analysis, network packet routing, or pure URL identification via hash algorithms without semantic text NLP.",
+                        "EC2: Papers dealing with acoustic voice/audio signal processing to detect fraudulent calls rather than processing message text or conversational scripts.",
+                        "EC3: Studies relying purely on non-learning static keyword blacklists/regex heuristics without any Deep Learning, Machine Learning, PLM, or LLM classification component.",
+                        "EC4: Purely theoretical frameworks or survey/position papers lacking experimental datasets, empirical implementations, or quantitative metrics.",
+                        "EC5: Papers not written in English or Vietnamese, or where the publication abstract/full-text is completely inaccessible."
+                    ]
+                    cursor.execute("""
+                    UPDATE research_protocols SET
+                        pico = ?, ic_list = ?, ec_list = ?, updated_at = ?
+                    WHERE project_id = 'default'
+                    """, (
+                        json.dumps(default_pico),
+                        json.dumps(default_ic),
+                        json.dumps(default_ec),
+                        datetime.now().isoformat()
+                    ))
             conn.commit()
 
     @classmethod
