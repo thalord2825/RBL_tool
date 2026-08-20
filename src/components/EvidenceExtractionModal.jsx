@@ -14,6 +14,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
   });
 
   const [isExtracting, setIsExtracting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [extractError, setExtractError] = useState(null);
   const [extractSuccess, setExtractSuccess] = useState(null);
 
@@ -31,6 +32,7 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
       setExtractError(null);
       setExtractSuccess(null);
       setIsExtracting(false);
+      setIsSaving(false);
     }
   }, [paper, isOpen]);
 
@@ -111,10 +113,20 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
     }
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSaveExtraction(paper.id, formData);
-    onClose();
+  const handleSubmit = async (e) => {
+    if (e) e.preventDefault();
+    setIsSaving(true);
+    setExtractError(null);
+    try {
+      if (onSaveExtraction) {
+        await onSaveExtraction(paper.id, formData);
+      }
+      onClose();
+    } catch (err) {
+      setExtractError(err.response?.data?.detail || err.message || 'Failed to save evidence entry.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -323,16 +335,27 @@ export default function EvidenceExtractionModal({ isOpen, onClose, paper, onSave
               <button
                 type="button"
                 onClick={onClose}
-                className="btn-editorial-outline"
+                disabled={isSaving || isExtracting}
+                className="btn-editorial-outline disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="btn-editorial bg-[#2D7A53] hover:bg-[#236142] py-2.5 px-6 font-bold flex items-center gap-2 text-white shadow-sm cursor-pointer"
+                disabled={isSaving || isExtracting}
+                className="btn-editorial bg-[#2D7A53] hover:bg-[#236142] py-2.5 px-6 font-bold flex items-center gap-2 text-white shadow-sm cursor-pointer disabled:opacity-50"
               >
-                <Save className="w-4 h-4" />
-                <span>Save Evidence Entry</span>
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Saving to Database...</span>
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    <span>Save Evidence Entry</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

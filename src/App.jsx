@@ -618,7 +618,11 @@ export default function App() {
         ...extractionData,
         status: 'INCLUDED'
       });
-      setPapers(prev => prev.map(p => p.id === paperId ? updated : p));
+      if (updated) {
+        setPapers(prev => prev.map(p => p.id === paperId ? updated : p));
+      } else {
+        await fetchPapers();
+      }
       addLog('SUCCESS', `Saved 7-column evidence extraction for [${paperId}].`);
       addToast({
         type: 'success',
@@ -628,6 +632,7 @@ export default function App() {
     } catch (err) {
       addLog('ERROR', `Failed to save extraction: ${err.message}`);
       addToast({ type: 'error', title: 'Extraction Save Failed', message: err.message });
+      throw err;
     }
   };
 
