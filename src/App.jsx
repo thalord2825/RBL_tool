@@ -40,7 +40,7 @@ export default function App() {
   const [sources, setSources] = useState(['ArXiv', 'OpenAlex', 'Semantic Scholar', 'CrossRef', 'Google Scholar']);
   const [sinceYear, setSinceYear] = useState(2020);
   const [researchContext, setResearchContext] = useState(
-    'Prioritize Vietnamese SMS/Zalo/Messenger phishing and scam datasets. If scarce, accept Southeast Asian and international mobile phishing studies with transferable NLP/LLM classification architectures (relax strict Vietnam-only constraint).'
+    'Prioritize Vietnamese SMS, Zalo, and Messenger phishing/scam datasets. If scarce, accept Southeast Asian and international mobile phishing/smishing corpora with transferable text classification architectures. Broaden technological scope beyond pure LLMs/PLMs to also INCLUDE modern and lightweight Deep Learning architectures (e.g., BiGRU, BiLSTM, CNN-BiLSTM, Attention mechanisms, Edge-AI, and cost-sensitive neural classifiers) evaluated for text-based scam detection alongside Transformer-based models (PhoBERT, BERT, LLMs).'
   );
   const [autoScreenOnHarvest, setAutoScreenOnHarvest] = useState(false);
   const [autoScreenModel, setAutoScreenModel] = useState('gemini-2.0-flash');

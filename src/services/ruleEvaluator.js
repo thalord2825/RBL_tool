@@ -140,12 +140,12 @@ export function getBuiltInPresets(ecList = []) {
       id: 'violates_ec3',
       category: 'Exclusion Criteria (EC)',
       icon: 'Cpu',
-      label: 'Violates EC3: No ML / No LLM Baseline',
-      description: 'Studies using only static blacklist heuristics without Machine Learning or Pretrained Language Models',
-      defaultEcReason: ecList[2] || 'EC3: Traditional rule-based or heuristic keyword matching systems lacking ML/PLM/LLM baselines or evaluation.',
+      label: 'Violates EC3: Non-Learning Rules Only',
+      description: 'Studies relying solely on static regex/blacklists without Deep Learning, ML, or PLM/LLM models',
+      defaultEcReason: ecList[2] || 'EC3: Studies relying purely on non-learning static keyword blacklists/regex heuristics without any Deep Learning, Machine Learning, PLM, or LLM classification component.',
       predicate: (p) => {
         const text = `${p.title || ''} ${p.abstract || ''} ${p.ai_rationale || ''} ${p.exclusion_reason || ''}`.toLowerCase();
-        return text.includes('ec3') || text.includes('heuristic-only') || text.includes('static blacklist') || (text.includes('rule-based') && !text.includes('bert') && !text.includes('llm') && !text.includes('learning'));
+        return text.includes('ec3') || text.includes('heuristic-only') || text.includes('static blacklist') || (text.includes('rule-based') && !text.includes('gru') && !text.includes('lstm') && !text.includes('cnn') && !text.includes('neural') && !text.includes('deep learning') && !text.includes('bert') && !text.includes('llm') && !text.includes('learning'));
       }
     },
     {

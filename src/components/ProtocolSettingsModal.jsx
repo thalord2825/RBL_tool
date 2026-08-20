@@ -17,26 +17,26 @@ import {
 } from 'lucide-react';
 
 export const DEFAULT_PICO = {
-  P: 'Scam messages (SMS, Zalo, Messenger, Email) and fraudulent call scripts targeting users, particularly within the context of the Vietnamese language and community alert platforms.',
-  I: 'Text classification based on Large Language Models (LLMs) utilizing In-context Learning techniques (Zero-shot, Few-shot, Few-shot + taxonomy) integrated into software systems.',
-  C: 'Fine-tuned Pre-trained Language Models (such as PhoBERT) and traditional filtering mechanisms based on blacklists or keyword matching.',
-  O: 'Classification performance (Accuracy, Precision, Recall, Macro-F1 per scam category), system inference latency (< 3 seconds), and API token cost (Cost per request).'
+  P: 'Scam messages (SMS, Zalo, Messenger, Email) and fraudulent conversational scripts targeting users, particularly within Vietnamese language context and transferable Southeast Asian / international mobile threat scenarios.',
+  I: 'Text classification based on Deep Learning architectures (BiGRU, BiLSTM, CNN, Attention), Pre-trained Language Models (PhoBERT, BERT, RoBERTa), or Large Language Models (LLMs via prompting / fine-tuning) integrated into software systems.',
+  C: 'Traditional lightweight baselines (TF-IDF, Naive Bayes, Logistic Regression), static blacklists/rules, or comparison among different Deep Learning / PLM / LLM architectures.',
+  O: 'Classification performance (Accuracy, Precision, Recall, Macro-F1, Average Precision), inference latency, computational resource footprint (model size/edge feasibility), and operational cost.'
 };
 
 export const DEFAULT_IC_LIST = [
-  'IC1: Studies focusing on the detection and classification of spam messages, scam messages (phishing/smishing), or fraud via conversational scripts.',
-  'IC2: Papers that apply or evaluate Large Language Models (LLMs via prompting) or Pre-trained Language Models (PLMs like BERT, PhoBERT).',
-  'IC3: Studies providing clear empirical results with metrics such as Accuracy, Precision, Recall, F1-score, inference latency, or computational cost.',
-  'IC4: Papers discussing system architecture, integrating AI into real-world platforms (web/mobile apps), or community alert mechanisms (crowdsourcing/blacklist).',
+  'IC1: Studies focusing on the detection and classification of spam messages, scam messages (phishing/smishing), or conversational fraud text.',
+  'IC2: Papers that apply, evaluate, or compare Deep Learning models (BiGRU, BiLSTM, CNN-LSTM, Attention, Edge-AI), Pre-trained Language Models (PLMs), or Large Language Models (LLMs) for text classification.',
+  'IC3: Studies providing clear empirical results with quantitative metrics such as Accuracy, Precision, Recall, F1-score, latency, memory footprint, or operational cost.',
+  'IC4: Papers discussing system architecture, edge/mobile deployment feasibility, real-world platforms (web/mobile apps), or community alert mechanisms.',
   'IC5: Studies published from 2020 onwards.'
 ];
 
 export const DEFAULT_EC_LIST = [
-  'EC1: Studies focusing solely on malware analysis, or pure URL identification via hash algorithms without semantic text analysis.',
-  'EC2: Papers dealing with acoustic voice/audio processing to detect fraudulent calls rather than processing text/scripts.',
-  'EC3: Studies that do not utilize Machine Learning, LLMs, or PLMs (e.g., relying entirely on classical rule-based methods).',
-  'EC4: Purely theoretical or vision papers lacking experimental datasets, practical implementations, or empirical evaluation.',
-  'EC5: Papers not written in English, or where the full-text is inaccessible.'
+  'EC1: Studies focusing solely on binary malware analysis, network packet routing, or pure URL identification via hash algorithms without semantic text NLP.',
+  'EC2: Papers dealing with acoustic voice/audio signal processing to detect fraudulent calls rather than processing message text or conversational scripts.',
+  'EC3: Studies relying purely on non-learning static keyword blacklists/regex heuristics without any Deep Learning, Machine Learning, PLM, or LLM classification component.',
+  'EC4: Purely theoretical frameworks or survey/position papers lacking experimental datasets, empirical implementations, or quantitative metrics.',
+  'EC5: Papers not written in English or Vietnamese, or where the publication abstract/full-text is completely inaccessible.'
 ];
 
 export default function ProtocolSettingsModal({
