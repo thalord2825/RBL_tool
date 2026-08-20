@@ -244,46 +244,53 @@ class Database:
         }, project_id=project_id)
 
     @classmethod
-    def merge_two_papers(cls, keep_id: str, remove_id: str) -> Optional[Dict[str, Any]]:
-        with cls.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM papers WHERE id = ?", (keep_id,))
-            row_keep = cursor.fetchone()
-            cursor.execute("SELECT * FROM papers WHERE id = ?", (remove_id,))
-            row_remove = cursor.fetchone()
+    def merge_two_papers(cls, keep_id: str, remove_id: str, project_id: str = "default") -> Optional[Dict[str, Any]]:
+        for attempt in range(5):
+            try:
+                with cls.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT * FROM papers WHERE id = ? AND project_id = ?", (keep_id, project_id))
+                    row_keep = cursor.fetchone()
+                    cursor.execute("SELECT * FROM papers WHERE id = ? AND project_id = ?", (remove_id, project_id))
+                    row_remove = cursor.fetchone()
 
-            if not row_keep or not row_remove:
-                return None
+                    if not row_keep or not row_remove:
+                        return None
 
-            p_keep = dict(row_keep)
-            p_remove = dict(row_remove)
+                    p_keep = dict(row_keep)
+                    p_remove = dict(row_remove)
 
-            # Preserve richest metadata
-            abstract = p_keep.get("abstract") if p_keep.get("abstract") != "N/A" else p_remove.get("abstract")
-            doi = p_keep.get("doi") if p_keep.get("doi") != "N/A" else p_remove.get("doi")
-            url = p_keep.get("url") or p_remove.get("url")
-            citations = max(p_keep.get("citations_count", 0), p_remove.get("citations_count", 0))
+                    # Preserve richest metadata
+                    abstract = p_keep.get("abstract") if p_keep.get("abstract") != "N/A" else p_remove.get("abstract")
+                    doi = p_keep.get("doi") if p_keep.get("doi") != "N/A" else p_remove.get("doi")
+                    url = p_keep.get("url") or p_remove.get("url")
+                    citations = max(p_keep.get("citations_count", 0), p_remove.get("citations_count", 0))
 
-            # Update keep_id paper as resolved
-            cursor.execute("""
-            UPDATE papers SET
-                abstract = ?, doi = ?, url = ?, citations_count = ?,
-                duplicate_flag = 0, duplicate_resolved = 1, duplicate_with_id = NULL, duplicate_reason = NULL
-            WHERE id = ?
-            """, (abstract, doi, url, citations, keep_id))
+                    # Update keep_id paper as resolved
+                    cursor.execute("""
+                    UPDATE papers SET
+                        abstract = ?, doi = ?, url = ?, citations_count = ?,
+                        duplicate_flag = 0, duplicate_resolved = 1, duplicate_with_id = NULL, duplicate_reason = NULL
+                    WHERE id = ? AND project_id = ?
+                    """, (abstract, doi, url, citations, keep_id, project_id))
 
-            # Delete the secondary remove_id paper
-            cursor.execute("DELETE FROM papers WHERE id = ?", (remove_id,))
-            conn.commit()
+                    # Delete the secondary remove_id paper
+                    cursor.execute("DELETE FROM papers WHERE id = ? AND project_id = ?", (remove_id, project_id))
+                    conn.commit()
 
-            cursor.execute("SELECT * FROM papers WHERE id = ?", (keep_id,))
-            row = cursor.fetchone()
-            if row:
-                d = dict(row)
-                d["duplicate_flag"] = bool(d.get("duplicate_flag", 0))
-                d["duplicate_resolved"] = bool(d.get("duplicate_resolved", 0))
-                return d
-            return None
+                    cursor.execute("SELECT * FROM papers WHERE id = ? AND project_id = ?", (keep_id, project_id))
+                    row = cursor.fetchone()
+                    if row:
+                        d = dict(row)
+                        d["duplicate_flag"] = bool(d.get("duplicate_flag", 0))
+                        d["duplicate_resolved"] = bool(d.get("duplicate_resolved", 0))
+                        return d
+                    return None
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     @classmethod
     def delete_paper(cls, paper_id: str, project_id: str = "default") -> bool:
