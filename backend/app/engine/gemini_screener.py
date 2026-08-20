@@ -89,26 +89,30 @@ class GeminiScreener:
     @classmethod
     def _build_candidate_models(cls, api_key: str, model_name: Optional[str] = None) -> List[str]:
         """
-        Builds prioritized list of candidate models, pushing models on cooldown to the back.
+        Builds prioritized list of candidate models, excluding unsupported/slow experimental models,
+        and pushing models on cooldown to the back.
         """
         raw_candidates = []
         
-        # User selected model
+        # 1. User selected model (if specified)
         if model_name and model_name != "auto":
             clean_m = model_name if model_name.startswith("models/") else f"models/{model_name}"
             if "gemini-3" in clean_m:
                 clean_m = "models/gemini-2.0-flash"
             raw_candidates.append(clean_m)
 
-        # Dynamic query
-        available = cls.get_available_models(api_key)
-        for m in available:
-            if m not in raw_candidates and any(k in m for k in ["flash", "pro"]):
-                raw_candidates.append(m)
-
+        # 2. Production Gemini Flash & Pro defaults (fastest, high reliability)
         for fb in VALID_DEFAULT_MODELS:
             if fb not in raw_candidates:
                 raw_candidates.append(fb)
+
+        # 3. Dynamic query strictly filtered for Gemini Flash / Pro
+        available = cls.get_available_models(api_key)
+        for m in available:
+            m_lower = m.lower()
+            if m not in raw_candidates and "gemini" in m_lower:
+                if any(k in m_lower for k in ["flash", "pro"]) and not any(bad in m_lower for bad in ["gemma", "vision", "embed", "aqa", "imagen", "tts", "embedding"]):
+                    raw_candidates.append(m)
 
         # Sort: Active models first (zero cooldown), cooling models at the back sorted by earliest expiration
         active = []
@@ -513,13 +517,7 @@ You MUST output ONLY a valid JSON array matching this exact schema for every inp
         if not gemini_key:
             raise ValueError("Gemini API key is required for automated evidence extraction.")
 
-        available_models = cls.get_available_models(gemini_key)
-        candidates_to_try = []
-        if model_name:
-            candidates_to_try.append(model_name)
-        candidates_to_try.extend([m for m in available_models if m not in candidates_to_try])
-        if not candidates_to_try:
-            candidates_to_try = VALID_DEFAULT_MODELS
+        candidates_to_try = cls._build_candidate_models(gemini_key, model_name)
 
         title = paper.get("title", "")
         abstract = paper.get("abstract", "")
@@ -573,10 +571,10 @@ Abstract: {abstract}
             if is_cool and len(candidates_to_try) > 1:
                 continue
 
-            for api_ver in ["v1beta", "v1"]:
+            for api_ver in ["v1beta"]:
                 url = f"https://generativelanguage.googleapis.com/{api_ver}/{model_id}:generateContent?key={gemini_key}"
                 try:
-                    response = requests.post(url, headers=headers, json=payload, timeout=20)
+                    response = requests.post(url, headers=headers, json=payload, timeout=12)
                     if response.status_code == 200:
                         result_json = response.json()
                         candidates = result_json.get("candidates", [])
@@ -607,6 +605,10 @@ Abstract: {abstract}
                     elif response.status_code == 429:
                         cls.set_model_cooldown(model_id, 60.0)
                         break
+                except requests.exceptions.Timeout:
+                    logger.warning(f"Evidence extraction timeout (12s) on {model_id}, skipping and setting cooldown...")
+                    cls.set_model_cooldown(model_id, 60.0)
+                    break
                 except Exception as e:
                     logger.warning(f"Evidence extraction try failed on {model_id} ({api_ver}): {e}")
 
