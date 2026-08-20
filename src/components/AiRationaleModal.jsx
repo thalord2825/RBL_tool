@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Sparkles, 
   CheckCircle2, 
@@ -8,7 +8,9 @@ import {
   UserCheck, 
   ShieldAlert, 
   BookOpen, 
-  X 
+  X,
+  Copy,
+  Check
 } from 'lucide-react';
 
 export default function AiRationaleModal({
@@ -17,7 +19,16 @@ export default function AiRationaleModal({
   paper,
   onUpdateStatus
 }) {
+  const [isAbstractCopied, setIsAbstractCopied] = useState(false);
+
   if (!isOpen || !paper) return null;
+
+  const handleCopyAbstract = (text) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setIsAbstractCopied(true);
+    setTimeout(() => setIsAbstractCopied(false), 2000);
+  };
 
   const confidence = Math.round((paper.ai_confidence || 0.85) * 100);
   const isIncluded = paper.status === 'INCLUDED';
@@ -92,12 +103,32 @@ export default function AiRationaleModal({
             </div>
 
             {paper.abstract && paper.abstract !== 'N/A' && (
-              <div className="mt-2 pt-2 border-t border-[#DCD6C5]">
-                <div className="text-[10px] text-[#7A766F] uppercase font-bold mb-1 flex items-center gap-1">
-                  <BookOpen className="w-3 h-3" />
-                  <span>Abstract:</span>
+              <div className="mt-2 pt-2 border-t border-[#DCD6C5] space-y-1">
+                <div className="text-[10px] text-[#7A766F] uppercase font-bold flex items-center justify-between">
+                  <div className="flex items-center gap-1">
+                    <BookOpen className="w-3 h-3 text-[#D94E28]" />
+                    <span>Abstract:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyAbstract(paper.abstract)}
+                    className="px-2 py-0.5 bg-[#1A1917] hover:bg-[#333] text-white text-[10px] font-bold rounded flex items-center gap-1 transition-all shadow-xs cursor-pointer active:scale-95"
+                    title="Copy abstract text"
+                  >
+                    {isAbstractCopied ? (
+                      <>
+                        <Check className="w-3 h-3 text-[#4ADE80]" />
+                        <span className="text-[#4ADE80]">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3 h-3 text-[#38BDF8]" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </button>
                 </div>
-                <p className="font-sans text-xs text-[#4A4843] leading-relaxed max-h-32 overflow-y-auto bg-[#F8F6F0] p-2 border border-[#E5E0D3]">
+                <p className="font-sans text-xs text-[#2C2B29] leading-relaxed max-h-36 overflow-y-auto bg-[#F8F6F0] p-2.5 border border-[#E5E0D3] rounded select-text cursor-text selection:bg-[#FED7AA] selection:text-[#9A3412] whitespace-pre-wrap">
                   {paper.abstract}
                 </p>
               </div>

@@ -100,6 +100,14 @@ export default function EvidenceTable({
 
   const [selectedRationalePaper, setSelectedRationalePaper] = useState(null);
   const [copiedDoiId, setCopiedDoiId] = useState(null);
+  const [isAbstractCopied, setIsAbstractCopied] = useState(false);
+
+  const handleCopyAbstract = (text) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setIsAbstractCopied(true);
+    setTimeout(() => setIsAbstractCopied(false), 2000);
+  };
 
   // Multi-Select State (External or Internal)
   const [internalSelectedIds, setInternalSelectedIds] = useState(new Set());
@@ -1730,16 +1738,39 @@ export default function EvidenceTable({
                   </div>
                 </div>
               ) : (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <div className="text-[10px] text-[#7A766F] uppercase font-bold flex items-center justify-between font-mono">
-                    <span>Abstract Text:</span>
-                    {selectedAbstractPaper.abstract && (
-                      <span>{selectedAbstractPaper.abstract.length} characters</span>
+                    <span className="flex items-center gap-1.5 text-[#1A1917]">
+                      <BookOpen className="w-3.5 h-3.5 text-[#D94E28]" />
+                      <span>Abstract Text:</span>
+                    </span>
+                    {selectedAbstractPaper.abstract && selectedAbstractPaper.abstract !== 'N/A' && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-[#7A766F]">{selectedAbstractPaper.abstract.length} chars</span>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyAbstract(selectedAbstractPaper.abstract)}
+                          className="px-2.5 py-1 bg-[#1A1917] hover:bg-[#333] text-white text-[11px] font-bold rounded flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95"
+                          title="Copy full abstract to clipboard"
+                        >
+                          {isAbstractCopied ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-[#4ADE80]" />
+                              <span className="text-[#4ADE80]">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5 text-[#38BDF8]" />
+                              <span>Copy Abstract</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     )}
                   </div>
                   
                   {selectedAbstractPaper.abstract && selectedAbstractPaper.abstract !== 'N/A' ? (
-                    <div className="bg-[#F8F6F0] p-4 border border-[#DCD6C5] border-l-4 border-l-[#D94E28] rounded font-sans text-xs text-[#2C2B29] leading-relaxed shadow-inner">
+                    <div className="bg-[#F8F6F0] p-4 border border-[#DCD6C5] border-l-4 border-l-[#D94E28] rounded font-sans text-xs text-[#2C2B29] leading-relaxed shadow-inner select-text cursor-text whitespace-pre-wrap selection:bg-[#FED7AA] selection:text-[#9A3412]">
                       {selectedAbstractPaper.abstract}
                     </div>
                   ) : (
