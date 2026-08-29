@@ -1283,6 +1283,13 @@ export default function EvidenceTable({
                         </div>
                       </td>
 
+                      {/* Optional Contributors Column in TEAM_MERGED tab */}
+                      {filterStage === 'TEAM_MERGED' && (
+                        <td className="py-3 px-3 w-44">
+                          {renderContributorBadges(paper.contributors)}
+                        </td>
+                      )}
+
                       {/* Col 4: 4-Tier High-Clarity Editorial Paper Metadata */}
                       <td className="py-3 px-4">
                         <div className="space-y-1.5">
@@ -1461,7 +1468,7 @@ export default function EvidenceTable({
                     {/* Visual Section Divider between Pinned Selected papers and remaining corpus */}
                     {isDividerRow && (
                       <tr className="bg-[#EDE9DF] border-y-2 border-[#1A1917]/20 select-none">
-                        <td colSpan={6} className="py-1.5 px-4 font-mono text-[10px] font-bold text-[#7A766F] text-center uppercase tracking-wider">
+                        <td colSpan={filterStage === 'TEAM_MERGED' ? 7 : 6} className="py-1.5 px-4 font-mono text-[10px] font-bold text-[#7A766F] text-center uppercase tracking-wider">
                           ─── End of Pinned Selection ({lastPinnedIndex + 1} Papers) • Remaining Records Below ───
                         </td>
                       </tr>
@@ -1487,6 +1494,13 @@ export default function EvidenceTable({
                       <td className="py-4 px-3 w-32">
                         <div className="w-24 h-6 bg-[#DCD6C5] rounded-full"></div>
                       </td>
+
+                      {/* Optional Col for Contributors */}
+                      {filterStage === 'TEAM_MERGED' && (
+                        <td className="py-4 px-3 w-44">
+                          <div className="w-28 h-5 bg-[#DCD6C5] rounded"></div>
+                        </td>
+                      )}
 
                       {/* Col 3: AI Screening Rationale */}
                       <td className="py-4 px-3 w-40">
@@ -1525,7 +1539,7 @@ export default function EvidenceTable({
               {/* 2. Completely Empty Corpus (Zero papers in SQLite) */}
               {!isLoading && papers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-16 px-4 text-center select-none">
+                  <td colSpan={filterStage === 'TEAM_MERGED' ? 7 : 6} className="py-16 px-4 text-center select-none">
                     <div className="max-w-md mx-auto space-y-4 bg-[#EFECE4] border-2 border-dashed border-[#C8C1AE] p-8 rounded-lg">
                       <div className="w-12 h-12 bg-[#DCD6C5] rounded-full flex items-center justify-center mx-auto text-[#7A766F]">
                         <BookOpen className="w-6 h-6" />
@@ -1564,7 +1578,7 @@ export default function EvidenceTable({
               {/* 3. Filter / Search Mismatch (Corpus has papers, but current filters matched 0) */}
               {!isLoading && papers.length > 0 && filteredPapers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-14 px-4 text-center select-none">
+                  <td colSpan={filterStage === 'TEAM_MERGED' ? 7 : 6} className="py-14 px-4 text-center select-none">
                     <div className="max-w-md mx-auto space-y-3 bg-[#FAF8F5] border border-[#DCD6C5] p-6 rounded-lg font-mono">
                       <div className="w-10 h-10 bg-[#FEF3C7] rounded-full flex items-center justify-center mx-auto text-[#B8860B]">
                         <Filter className="w-5 h-5" />
