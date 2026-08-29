@@ -1151,9 +1151,10 @@ export default function EvidenceTable({
             <tbody className="divide-y divide-[#E5E0D3]">
               {filteredPapers.map((paper, index) => {
                 const isSelected = selectedPaperIds.has(paper.id);
-                const isIncluded = paper.status === 'INCLUDED';
+                const isMaster = Boolean(paper.is_master_record || paper.status === 'MERGED_MASTER' || paper.id?.startsWith('M'));
+                const isIncluded = paper.status === 'INCLUDED' || isMaster;
                 const isExcluded = paper.status === 'EXCLUDED';
-                const isExtracted = isIncluded && paper.tool_model && paper.tool_model !== 'N/A';
+                const isExtracted = Boolean(paper.tool_model && paper.tool_model !== 'N/A' && paper.tool_model.trim() !== '');
                 const confidence = Math.round((paper.ai_confidence || 0.85) * 100);
                 const hasValidAbstract = paper.abstract && paper.abstract !== 'N/A' && paper.abstract.trim().length >= 25;
                 const isFetchingThisAbstract = fetchingAbstractId === paper.id;
@@ -1441,11 +1442,11 @@ export default function EvidenceTable({
 
                       {/* Col 5: Evidence Extraction Status (7 Cols) */}
                       <td className="py-3 px-3 font-mono text-xs">
-                        {isIncluded ? (
+                        {(isIncluded || isMaster) ? (
                           <div className="space-y-1">
                             <button
                               onClick={() => onOpenExtraction(paper)}
-                              className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded ${
+                              className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded cursor-pointer ${
                                 isExtracted
                                   ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5] hover:bg-[#C2E4C9]'
                                   : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A] hover:bg-[#FDE68A]'
@@ -1455,11 +1456,18 @@ export default function EvidenceTable({
                               <span>{isExtracted ? 'Edit 7-Col Matrix' : '+ Extract Evidence'}</span>
                             </button>
 
-                            {isExtracted && (
-                              <div className="text-[9px] text-[#4A4843] space-y-0.5 bg-[#FDFCF9] p-1.5 border border-[#DCD6C5] rounded">
-                                <div className="truncate">Model: <strong>{paper.tool_model}</strong></div>
-                                <div className="truncate">Results: <strong>{paper.empirical_results}</strong></div>
+                            {isExtracted ? (
+                              <div className="text-[9px] text-[#4A4843] space-y-0.5 bg-[#FDFCF9] p-1.5 border border-[#DCD6C5] rounded max-w-[280px]">
+                                <div className="truncate" title={paper.tool_model}>Model: <strong>{paper.tool_model}</strong></div>
+                                {paper.dataset_name && paper.dataset_name !== 'N/A' && (
+                                  <div className="truncate text-[#7A766F]" title={paper.dataset_name}>Data: {paper.dataset_name}</div>
+                                )}
+                                {paper.empirical_results && paper.empirical_results !== 'N/A' && (
+                                  <div className="truncate text-[#2D7A53] font-semibold" title={paper.empirical_results}>Results: {paper.empirical_results}</div>
+                                )}
                               </div>
+                            ) : (
+                              <span className="text-[10px] text-[#A09B8E] italic block pt-0.5">Not extracted yet</span>
                             )}
                           </div>
                         ) : (
