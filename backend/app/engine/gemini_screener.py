@@ -861,17 +861,47 @@ Abstract: {abstract}
                 }, project_id=project_id)
 
                 success_count += 1
-                yield f"data: {json.dumps({'event': 'paper_success', 'paper_id': p_id, 'index': idx, 'total': total_count, 'evidence': evidence, 'duration_ms': p_dur_ms, 'percent': int((idx / total_count) * 100), 'log': f'✓ [{p_id}] Extracted in {p_dur_ms}ms (Model: {evidence.get(\"tool_model\", \"N/A\")[:30]})'})}\n\n"
+                model_str = str(evidence.get("tool_model", "N/A"))[:30]
+                success_payload = {
+                    "event": "paper_success",
+                    "paper_id": p_id,
+                    "index": idx,
+                    "total": total_count,
+                    "evidence": evidence,
+                    "duration_ms": p_dur_ms,
+                    "percent": int((idx / total_count) * 100),
+                    "log": f"✓ [{p_id}] Extracted in {p_dur_ms}ms (Model: {model_str})"
+                }
+                yield f"data: {json.dumps(success_payload)}\n\n"
 
             except Exception as e:
                 failed_count += 1
-                yield f"data: {json.dumps({'event': 'paper_error', 'paper_id': p_id, 'index': idx, 'total': total_count, 'error': str(e), 'percent': int((idx / total_count) * 100), 'log': f'❌ [{p_id}] Extraction error: {str(e)[:80]}'})}\n\n"
+                err_msg = str(e)[:80]
+                error_payload = {
+                    "event": "paper_error",
+                    "paper_id": p_id,
+                    "index": idx,
+                    "total": total_count,
+                    "error": str(e),
+                    "percent": int((idx / total_count) * 100),
+                    "log": f"❌ [{p_id}] Extraction error: {err_msg}"
+                }
+                yield f"data: {json.dumps(error_payload)}\n\n"
 
             # Rate-limiting delay between papers
             if delay_ms > 0 and idx < total_count:
                 time.sleep(delay_ms / 1000.0)
 
         total_dur_s = round(time.time() - start_time, 1)
-        yield f"data: {json.dumps({'event': 'batch_complete', 'total': total_count, 'total_success': success_count, 'total_failed': failed_count, 'duration_s': total_dur_s, 'percent': 100, 'log': f'🎉 Batch complete! {success_count}/{total_count} papers extracted successfully in {total_dur_s}s.'})}\n\n"
+        complete_payload = {
+            "event": "batch_complete",
+            "total": total_count,
+            "total_success": success_count,
+            "total_failed": failed_count,
+            "duration_s": total_dur_s,
+            "percent": 100,
+            "log": f"🎉 Batch complete! {success_count}/{total_count} papers extracted successfully in {total_dur_s}s."
+        }
+        yield f"data: {json.dumps(complete_payload)}\n\n"
 
 
