@@ -165,10 +165,19 @@ class ExtractEvidenceRequest(BaseModel):
     model_name: Optional[str] = None
     project_id: str = "default"
 
+class BulkExtractEvidenceRequest(BaseModel):
+    paper_ids: List[str]
+    project_id: str = "default"
+    api_key: Optional[str] = None
+    model_name: Optional[str] = "auto"
+    concurrency: Optional[int] = 2
+    delay_ms: Optional[int] = 400
+
 ManualPaperItem.model_rebuild()
 AddManualPaperRequest.model_rebuild()
 FetchMetadataRequest.model_rebuild()
 ExtractEvidenceRequest.model_rebuild()
+BulkExtractEvidenceRequest.model_rebuild()
 
 
 

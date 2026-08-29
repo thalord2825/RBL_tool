@@ -23,7 +23,8 @@ from .schemas import (
     UpdateAbstractRequest,
     FetchMetadataRequest,
     AddManualPaperRequest,
-    ExtractEvidenceRequest
+    ExtractEvidenceRequest,
+    BulkExtractEvidenceRequest
 )
 from .database import Database
 from .crawlers import (
@@ -801,6 +802,27 @@ def stream_paper_evidence_extraction(req: ExtractEvidenceRequest):
             },
             api_key=req.api_key,
             model_name=req.model_name
+        ),
+        media_type="text/event-stream"
+    )
+
+@app.post("/api/stream/bulk-extract-evidence")
+def stream_bulk_evidence_extraction(req: BulkExtractEvidenceRequest):
+    """
+    Server-Sent Events (SSE) streaming endpoint for batch evidence extraction across multiple selected papers.
+    """
+    if not req.paper_ids:
+        def err_stream():
+            yield f"data: {json.dumps({'event': 'error', 'message': 'No paper IDs provided for bulk extraction.'})}\n\n"
+        return StreamingResponse(err_stream(), media_type="text/event-stream")
+
+    return StreamingResponse(
+        GeminiScreener.stream_bulk_extract_evidence(
+            paper_ids=req.paper_ids,
+            project_id=req.project_id,
+            api_key=req.api_key,
+            model_name=req.model_name,
+            delay_ms=req.delay_ms or 400
         ),
         media_type="text/event-stream"
     )

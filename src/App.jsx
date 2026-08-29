@@ -16,6 +16,7 @@ import AiScreenMiniDock from './components/AiScreenMiniDock';
 import CsvImportModal from './components/CsvImportModal';
 import AddPaperManualModal from './components/AddPaperManualModal';
 import TeamMergeModal from './components/TeamMergeModal';
+import BulkEvidenceExtractionModal from './components/BulkEvidenceExtractionModal';
 import ToastContainer from './components/ToastContainer';
 
 import { apiClient, getStoredGeminiApiKey } from './services/apiClient';
@@ -63,6 +64,8 @@ export default function App() {
   const [isCsvImportModalOpen, setIsCsvImportModalOpen] = useState(false);
   const [isAddPaperModalOpen, setIsAddPaperModalOpen] = useState(false);
   const [isTeamMergeOpen, setIsTeamMergeOpen] = useState(false);
+  const [bulkExtractPaperIds, setBulkExtractPaperIds] = useState([]);
+  const [isBulkExtractModalOpen, setIsBulkExtractModalOpen] = useState(false);
 
   // Real-Time Streaming Progress
   const [harvestProgress, setHarvestProgress] = useState(null);
@@ -806,6 +809,10 @@ export default function App() {
         onBulkUpdateStatus={handleBulkUpdateStatus}
         onBulkDeletePapers={handleBulkDeletePapers}
         onBulkAiScreen={handleBulkAiScreen}
+        onBulkExtractEvidence={(ids) => {
+          setBulkExtractPaperIds(ids);
+          setIsBulkExtractModalOpen(true);
+        }}
         onUpdatePaper={(updated) => setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))}
         onBulkPapersUpdate={(newPapers) => setPapers(newPapers)}
         ecList={ecList}
@@ -967,6 +974,26 @@ export default function App() {
             type: 'success',
             title: 'Master Corpus Synced',
             message: `Loaded ${syncedPapers?.length || 0} master papers into active view.`
+          });
+        }}
+      />
+
+      {/* Batch AI Evidence Extraction Progress Modal */}
+      <BulkEvidenceExtractionModal
+        isOpen={isBulkExtractModalOpen}
+        onClose={() => {
+          setIsBulkExtractModalOpen(false);
+          fetchPapers();
+        }}
+        paperIds={bulkExtractPaperIds}
+        papers={papers}
+        onCompleted={() => {
+          fetchPapers();
+          addLog('SUCCESS', `Completed bulk evidence extraction on ${bulkExtractPaperIds.length} papers.`);
+          addToast({
+            type: 'success',
+            title: 'Bulk Extraction Complete',
+            message: `Extracted 7-column evidence matrix for ${bulkExtractPaperIds.length} papers.`
           });
         }}
       />

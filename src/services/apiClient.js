@@ -469,6 +469,74 @@ export const apiClient = {
     }
   },
 
+  // Bulk AI Evidence Extraction streaming with SSE
+  streamBulkExtractEvidence: async ({
+    paperIds,
+    apiKey,
+    modelName = 'auto',
+    projectId = 'default',
+    delayMs = 400,
+    signal,
+    onEvent,
+    onError
+  }) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/stream/bulk-extract-evidence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          paper_ids: paperIds,
+          api_key: apiKey,
+          model_name: modelName,
+          project_id: projectId,
+          delay_ms: delayMs,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            try {
+              const jsonStr = trimmed.replace(/^data:\s*/, '');
+              const eventData = JSON.parse(jsonStr);
+              if (onEvent) onEvent(eventData);
+            } catch (e) {
+              console.warn('Failed to parse SSE bulk evidence chunk:', e);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        if (onEvent) {
+          onEvent({ event: 'log', log: '⛔ Bulk extraction aborted by user.' });
+        }
+      } else if (onError) {
+        onError(err);
+      } else {
+        throw err;
+      }
+    }
+  },
+
   // Team SLR Multi-Researcher Merger
   getTeamMembers: async (repoPath = 'C:\\Users\\USER\\RBL_ScamShield') => {
     const res = await api.get('/team/members', { params: { repo_path: repoPath } });

@@ -792,3 +792,86 @@ Abstract: {abstract}
             "extracted_by_model": "None"
         }
 
+    @classmethod
+    def stream_bulk_extract_evidence(
+        cls,
+        paper_ids: List[str],
+        project_id: str = "default",
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = "auto",
+        delay_ms: int = 400
+    ):
+        """
+        Server-Sent Events generator that streams bulk evidence extraction progress across multiple selected papers.
+        Automatically saves extracted 7-column evidence directly into SQLite upon each paper completion.
+        """
+        gemini_key = api_key or os.getenv("GEMINI_API_KEY", "")
+        if not gemini_key:
+            yield f"data: {json.dumps({'event': 'error', 'message': 'Gemini API key is required. Please configure your API key.'})}\n\n"
+            return
+
+        from ..database import Database
+        all_papers = Database.get_all_papers(project_id)
+        paper_dict = {p["id"]: p for p in all_papers}
+
+        target_papers = [paper_dict[pid] for pid in paper_ids if pid in paper_dict]
+        total_count = len(target_papers)
+
+        if total_count == 0:
+            yield f"data: {json.dumps({'event': 'error', 'message': 'No valid papers found for the provided IDs.'})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'event': 'batch_start', 'total': total_count, 'paper_ids': [p['id'] for p in target_papers]})}\n\n"
+
+        success_count = 0
+        failed_count = 0
+        start_time = time.time()
+
+        for idx, paper in enumerate(target_papers, 1):
+            p_id = paper["id"]
+            p_title = paper.get("title", "")
+            p_abstract = paper.get("abstract", "")
+
+            yield f"data: {json.dumps({'event': 'paper_start', 'paper_id': p_id, 'index': idx, 'total': total_count, 'title': p_title, 'percent': int(((idx - 1) / total_count) * 100)})}\n\n"
+
+            if not p_abstract or p_abstract.strip() in ["", "N/A", "None"]:
+                yield f"data: {json.dumps({'event': 'paper_error', 'paper_id': p_id, 'index': idx, 'total': total_count, 'error': 'Abstract is empty or N/A', 'log': f'⚠️ [{p_id}] Skipped: Abstract is empty.'})}\n\n"
+                failed_count += 1
+                continue
+
+            try:
+                p_start = time.time()
+                evidence = cls.extract_evidence_single_paper(
+                    paper=paper,
+                    api_key=gemini_key,
+                    model_name=model_name
+                )
+                p_dur_ms = int((time.time() - p_start) * 1000)
+
+                # Persist to Database immediately
+                Database.update_paper(p_id, {
+                    "tool_model": evidence.get("tool_model", "N/A"),
+                    "dataset_name": evidence.get("dataset_name", "N/A"),
+                    "sample_size_n": evidence.get("sample_size_n", "N/A"),
+                    "metrics_evaluated": evidence.get("metrics_evaluated", "N/A"),
+                    "empirical_results": evidence.get("empirical_results", "N/A"),
+                    "code_url": evidence.get("code_url", "N/A"),
+                    "limitations": evidence.get("limitations", "N/A"),
+                    "status": "INCLUDED"
+                }, project_id=project_id)
+
+                success_count += 1
+                yield f"data: {json.dumps({'event': 'paper_success', 'paper_id': p_id, 'index': idx, 'total': total_count, 'evidence': evidence, 'duration_ms': p_dur_ms, 'percent': int((idx / total_count) * 100), 'log': f'✓ [{p_id}] Extracted in {p_dur_ms}ms (Model: {evidence.get(\"tool_model\", \"N/A\")[:30]})'})}\n\n"
+
+            except Exception as e:
+                failed_count += 1
+                yield f"data: {json.dumps({'event': 'paper_error', 'paper_id': p_id, 'index': idx, 'total': total_count, 'error': str(e), 'percent': int((idx / total_count) * 100), 'log': f'❌ [{p_id}] Extraction error: {str(e)[:80]}'})}\n\n"
+
+            # Rate-limiting delay between papers
+            if delay_ms > 0 and idx < total_count:
+                time.sleep(delay_ms / 1000.0)
+
+        total_dur_s = round(time.time() - start_time, 1)
+        yield f"data: {json.dumps({'event': 'batch_complete', 'total': total_count, 'total_success': success_count, 'total_failed': failed_count, 'duration_s': total_dur_s, 'percent': 100, 'log': f'🎉 Batch complete! {success_count}/{total_count} papers extracted successfully in {total_dur_s}s.'})}\n\n"
+
+

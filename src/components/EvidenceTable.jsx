@@ -59,6 +59,7 @@ export default function EvidenceTable({
   onBulkUpdateStatus,
   onBulkDeletePapers,
   onBulkAiScreen,
+  onBulkExtractEvidence,
   onUpdatePaper,
   onBulkPapersUpdate,
   ecList = [],
@@ -1626,6 +1627,18 @@ export default function EvidenceTable({
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>AI Screen ({selectedPaperIds.size})</span>
+            </button>
+          )}
+
+          {/* Bulk AI Evidence Extraction */}
+          {onBulkExtractEvidence && (
+            <button
+              onClick={() => onBulkExtractEvidence(Array.from(selectedPaperIds))}
+              className="bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white px-3.5 py-1.5 font-bold flex items-center gap-1.5 transition-all border border-orange-500 shadow-sm cursor-pointer"
+              title="Run 7-column empirical AI evidence extraction for all selected papers"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Bulk Extract Evidence ({selectedPaperIds.size})</span>
             </button>
           )}
 
