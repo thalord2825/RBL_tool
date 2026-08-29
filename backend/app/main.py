@@ -39,6 +39,7 @@ from .engine.rbl_exporter import RblExporter
 from .engine.github_atomic import GitHubAtomicCommitter
 from .engine.abstract_resolver import AbstractResolver
 from .engine.metadata_fetcher import MetadataFetcher
+from .engine.team_merger import TeamSlrMerger
 
 # Setup structured logging
 logging.basicConfig(
@@ -803,6 +804,93 @@ def stream_paper_evidence_extraction(req: ExtractEvidenceRequest):
         ),
         media_type="text/event-stream"
     )
+
+class TeamMergeRequest(BaseModel):
+    repo_path: str = r"C:\Users\USER\RBL_ScamShield"
+    project_id: str = "default"
+
+@app.get("/api/team/members")
+def get_team_members_summary(repo_path: str = r"C:\Users\USER\RBL_ScamShield"):
+    """
+    Scans local RBL_ScamShield repository and returns progress metrics for each team member.
+    """
+    try:
+        return {
+            "status": "success",
+            "repo_path": repo_path,
+            "members": TeamSlrMerger.get_members_summary(repo_path)
+        }
+    except Exception as e:
+        logger.error(f"Failed to scan team members: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/team/merge")
+def merge_team_slr_corpus(req: TeamMergeRequest):
+    """
+    Cross-matches and deduplicates included candidate papers across all 5 team members,
+    merging their 7-column evidence extractions into a master matrix.
+    """
+    try:
+        result = TeamSlrMerger.merge_team_slr(req.repo_path)
+        return {
+            "status": "success",
+            "repo_path": req.repo_path,
+            **result
+        }
+    except Exception as e:
+        logger.error(f"Failed to merge team SLR corpus: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/team/sync-to-corpus")
+def sync_master_to_active_corpus(req: TeamMergeRequest):
+    """
+    Imports the merged deduplicated master papers into the active project SQLite corpus.
+    """
+    try:
+        result = TeamSlrMerger.merge_team_slr(req.repo_path)
+        master_papers = result.get("master_papers", [])
+
+        added_count = 0
+        for p in master_papers:
+            # Build paper object for SQLite
+            paper_obj = {
+                "id": p["master_id"],
+                "title": p["title"],
+                "authors": p.get("authors", "N/A"),
+                "year": p.get("year", 2024),
+                "venue": p.get("venue", "N/A"),
+                "doi": p.get("doi", ""),
+                "url": p.get("url", ""),
+                "abstract": "N/A",
+                "source": "Team SLR Merger",
+                "status": "INCLUDED",
+                "tool_model": p.get("tool_model", "N/A"),
+                "dataset_name": p.get("dataset_name", "N/A"),
+                "sample_size_n": p.get("sample_size_n", "N/A"),
+                "metrics_evaluated": p.get("metrics_evaluated", "N/A"),
+                "empirical_results": p.get("empirical_results", "N/A"),
+                "code_url": p.get("code_url", "N/A"),
+                "limitations": p.get("limitations", "N/A"),
+                "ai_decision": "INCLUDED",
+                "ai_confidence": 1.0,
+                "ai_reasoning": f"Synthesized from team members: {', '.join(p.get('contributors', []))}"
+            }
+            Database.upsert_paper(paper_obj, project_id=req.project_id)
+            added_count += 1
+
+        all_papers = Database.get_all_papers(req.project_id)
+        flagged = DeduplicationEngine.flag_corpus_duplicates(all_papers)
+
+        return {
+            "status": "synced",
+            "imported_count": added_count,
+            "total_papers": len(flagged),
+            "papers": flagged
+        }
+    except Exception as e:
+        logger.error(f"Failed to sync master papers to corpus: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

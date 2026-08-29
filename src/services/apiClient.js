@@ -468,6 +468,22 @@ export const apiClient = {
       }
     }
   },
+
+  // Team SLR Multi-Researcher Merger
+  getTeamMembers: async (repoPath = 'C:\\Users\\USER\\RBL_ScamShield') => {
+    const res = await api.get('/team/members', { params: { repo_path: repoPath } });
+    return res.data;
+  },
+
+  mergeTeamCorpus: async (repoPath = 'C:\\Users\\USER\\RBL_ScamShield', projectId = 'default') => {
+    const res = await api.post('/team/merge', { repo_path: repoPath, project_id: projectId });
+    return res.data;
+  },
+
+  syncTeamToCorpus: async (repoPath = 'C:\\Users\\USER\\RBL_ScamShield', projectId = 'default') => {
+    const res = await api.post('/team/sync-to-corpus', { repo_path: repoPath, project_id: projectId });
+    return res.data;
+  },
 };
 
 export default apiClient;
