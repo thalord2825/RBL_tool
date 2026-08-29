@@ -189,6 +189,10 @@ class Database:
                         status_val = p.get("status", "PENDING")
                         ex_reason = None if status_val in ["INCLUDED", "MERGED_MASTER"] else p.get("exclusion_reason")
                         
+                        contrib_val = p.get("contributors", "")
+                        if isinstance(contrib_val, (list, tuple, set)):
+                            contrib_val = ", ".join(str(x) for x in contrib_val if x)
+
                         cursor.execute("""
                         INSERT OR REPLACE INTO papers (
                             id, project_id, title, authors, year, venue, abstract,
@@ -229,7 +233,7 @@ class Database:
                             p.get("duplicate_reason"),
                             1 if p.get("duplicate_resolved") else 0,
                             p.get("matched_ics"),
-                            p.get("contributors", ""),
+                            contrib_val,
                             1 if p.get("is_master_record") else 0,
                             created_at
                         ))

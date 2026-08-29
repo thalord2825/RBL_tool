@@ -116,6 +116,17 @@ class DeduplicationEngine:
         title_word_index = defaultdict(list)
 
         for i, p in enumerate(flagged_papers):
+            # Master papers are Canonical Single Source of Truth and are never duplicates
+            is_master = bool(p.get("is_master_record") or str(p.get("id", "")).startswith("M"))
+            if is_master:
+                p["duplicate_flag"] = False
+                p["duplicate_with_id"] = None
+                p["duplicate_reason"] = None
+                doi_list.append("")
+                norm_title_list.append("")
+                author_sets.append(set())
+                continue
+
             # Only reset duplicate flags if not explicitly resolved by user
             if not p.get("duplicate_resolved"):
                 p["duplicate_flag"] = False

@@ -1200,29 +1200,41 @@ export default function EvidenceTable({
                       <td className="py-3 px-3">
                         <div className="space-y-1.5">
                           
-                          {/* Status Dropdown */}
-                          <select
-                            value={paper.status}
-                            onChange={(e) => handleStatusChange(paper, e.target.value)}
-                            className={`font-mono text-[10px] font-bold py-1 px-2 border cursor-pointer uppercase transition-all focus:outline-none w-full ${
-                              isIncluded
-                                ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
-                                : isExcluded
-                                ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
-                                : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A]'
-                            }`}
-                          >
-                            <option value="INCLUDED">✓ INCLUDED</option>
-                            <option value="PENDING">⏳ PENDING</option>
-                            <option value="EXCLUDED">✕ EXCLUDED</option>
-                          </select>
+                          {/* Status Badge / Dropdown */}
+                          {paper.is_master_record || paper.status === 'MERGED_MASTER' ? (
+                            <div className="bg-[#E0F2FE] text-[#0369A1] border border-[#BAE6FD] px-2 py-1 font-mono text-[10px] font-bold rounded flex items-center justify-between shadow-2xs">
+                              <span className="flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-[#0284C7]" />
+                                <span>MASTER INCLUDED</span>
+                              </span>
+                              <span className="text-[9px] bg-[#BAE6FD] text-[#0369A1] px-1 rounded">TEAM</span>
+                            </div>
+                          ) : (
+                            <select
+                              value={paper.status}
+                              onChange={(e) => handleStatusChange(paper, e.target.value)}
+                              className={`font-mono text-[10px] font-bold py-1 px-2 border cursor-pointer uppercase transition-all focus:outline-none w-full ${
+                                isIncluded
+                                  ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
+                                  : isExcluded
+                                  ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
+                                  : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A]'
+                              }`}
+                            >
+                              <option value="INCLUDED">✓ INCLUDED</option>
+                              <option value="PENDING">⏳ PENDING</option>
+                              <option value="EXCLUDED">✕ EXCLUDED</option>
+                            </select>
+                          )}
 
                           {/* Compact Clickable AI Decision Pill */}
-                          {(paper.ai_decision || isIncluded || isExcluded) && (
+                          {(paper.ai_decision || isIncluded || isExcluded || paper.is_master_record) && (
                             <div 
                               onClick={() => setSelectedRationalePaper(paper)}
                               className={`border p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded ${
-                                isIncluded
+                                paper.is_master_record || paper.status === 'MERGED_MASTER'
+                                  ? 'border-[#BAE6FD] bg-[#F0F9FF] hover:bg-[#E0F2FE]'
+                                  : isIncluded
                                   ? 'border-[#98D4A5] bg-[#F4F9F5] hover:bg-[#EAF5EC]'
                                   : isExcluded
                                   ? 'border-[#F5B7B1] bg-[#FDF4F4] hover:bg-[#FAEAEA]'
@@ -1232,14 +1244,16 @@ export default function EvidenceTable({
                             >
                               <div className="flex items-center justify-between gap-1">
                                 <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border rounded ${
-                                  isIncluded
+                                  paper.is_master_record || paper.status === 'MERGED_MASTER'
+                                    ? 'bg-[#E0F2FE] text-[#0369A1] border-[#BAE6FD]'
+                                    : isIncluded
                                     ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
                                     : isExcluded
                                     ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
                                     : 'bg-[#E9D8FD] text-[#805AD5] border-[#D6BCFA]'
                                 }`}>
                                   <Sparkles className="w-2.5 h-2.5" />
-                                  <span>{isIncluded ? 'INCLUDED' : isExcluded ? 'EXCLUDED' : paper.ai_decision}</span>
+                                  <span>{paper.is_master_record ? 'MERGED MASTER' : isIncluded ? 'INCLUDED' : isExcluded ? 'EXCLUDED' : paper.ai_decision}</span>
                                 </span>
 
                                 <span className="text-[#7A766F] font-bold">
@@ -1248,17 +1262,17 @@ export default function EvidenceTable({
                               </div>
 
                               {/* Matched ICs badge for INCLUDED papers */}
-                              {isIncluded && (
+                              {(isIncluded || paper.is_master_record) && (
                                 <div className="text-[#2D7A53] truncate pt-1 font-semibold border-t border-[#D4EBD9] mt-1 flex items-center gap-1">
                                   <CheckCircle2 className="w-2.5 h-2.5 text-[#2D7A53] shrink-0" />
                                   <span className="truncate">
-                                    {paper.matched_ics ? `Matched: ${paper.matched_ics}` : 'Eligible under PICO'}
+                                    {paper.is_master_record ? `Consensus Included` : paper.matched_ics ? `Matched: ${paper.matched_ics}` : 'Eligible under PICO'}
                                   </span>
                                 </div>
                               )}
 
                               {/* Exclusion reason ONLY for EXCLUDED papers (NEVER show for INCLUDED papers!) */}
-                              {!isIncluded && isExcluded && paper.exclusion_reason && (
+                              {!isIncluded && isExcluded && paper.exclusion_reason && !paper.is_master_record && (
                                 <div className="text-[#C93B2B] truncate pt-1 font-semibold border-t border-[#F5B7B1] mt-1">
                                   {paper.exclusion_reason}
                                 </div>
@@ -1266,8 +1280,8 @@ export default function EvidenceTable({
                             </div>
                           )}
 
-                          {/* Duplicate Alert Pill */}
-                          {paper.duplicate_flag && (
+                          {/* Duplicate Alert Pill (Never shown on Master papers) */}
+                          {paper.duplicate_flag && !paper.is_master_record && !paper.id.startsWith('M') && filterStage !== 'TEAM_MERGED' && (
                             <button
                               onClick={() => onOpenDuplicateCompare(paper, paper.duplicate_with_id)}
                               className="w-full bg-[#FEF3C7] border border-[#FDE68A] text-[#B8860B] p-1 font-mono text-[9px] font-bold flex items-center justify-between hover:bg-[#FDE68A] transition-colors rounded"
