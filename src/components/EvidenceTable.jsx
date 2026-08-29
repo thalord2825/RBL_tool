@@ -59,6 +59,7 @@ export default function EvidenceTable({
   onBulkUpdateStatus,
   onBulkDeletePapers,
   onBulkAiScreen,
+  onBulkExtractEvidence,
   onUpdatePaper,
   onBulkPapersUpdate,
   ecList = [],
@@ -75,6 +76,7 @@ export default function EvidenceTable({
   const [selectedSource, setSelectedSource] = useState('ALL');
   const [authorFilter, setAuthorFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('ALL');
+  const [contributorFilter, setContributorFilter] = useState('ALL');
   const [sortBy, setSortBy] = useState('UNSCREENED_FIRST'); // 'UNSCREENED_FIRST' | 'NEWEST_HARVEST' | 'YEAR_DESC' | 'YEAR_ASC' | 'TITLE_AZ' | 'CITATIONS_DESC'
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
@@ -170,11 +172,29 @@ export default function EvidenceTable({
   const filteredPapers = useMemo(() => {
     let result = papers.filter(paper => {
       if (!paper) return false;
-      if (filterStage === 'INCLUDED' && paper.status !== 'INCLUDED') return false;
-      if (filterStage === 'PENDING' && paper.status !== 'PENDING') return false;
-      if (filterStage === 'EXCLUDED' && paper.status !== 'EXCLUDED') return false;
-      if (filterStage === 'UNSURE' && paper.ai_decision !== 'UNSURE') return false;
-      if (filterStage === 'DUPLICATES' && !paper.duplicate_flag) return false;
+      // Filter by Stage / Space
+      if (filterStage === 'INCLUDED') {
+        // Only personal included papers
+        if (paper.status !== 'INCLUDED' || paper.is_master_record || paper.id?.startsWith('M')) return false;
+      } else if (filterStage === 'TEAM_MERGED') {
+        // Only Master papers from Team SLR
+        if (!paper.is_master_record && paper.status !== 'MERGED_MASTER' && !paper.id?.startsWith('M')) return false;
+        
+        // Contributor filter inside TEAM_MERGED tab
+        if (contributorFilter === 'MULTI') {
+          if (!paper.contributors || !paper.contributors.includes(',')) return false;
+        } else if (contributorFilter !== 'ALL') {
+          if (!paper.contributors || !paper.contributors.toLowerCase().includes(contributorFilter.toLowerCase())) return false;
+        }
+      } else if (filterStage === 'PENDING') {
+        if (paper.status !== 'PENDING') return false;
+      } else if (filterStage === 'EXCLUDED') {
+        if (paper.status !== 'EXCLUDED') return false;
+      } else if (filterStage === 'UNSURE') {
+        if (paper.ai_decision !== 'UNSURE') return false;
+      } else if (filterStage === 'DUPLICATES') {
+        if (!paper.duplicate_flag) return false;
+      }
 
       // Source Filter
       if (selectedSource !== 'ALL' && paper.source !== selectedSource) return false;
@@ -249,7 +269,7 @@ export default function EvidenceTable({
     });
 
     return result;
-  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, sortBy, pinSelected, selectedPaperIds]);
+  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, contributorFilter, sortBy, pinSelected, selectedPaperIds]);
 
   const visibleIds = filteredPapers.map(p => p.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedPaperIds.has(id));
@@ -559,6 +579,40 @@ export default function EvidenceTable({
     }
   };
 
+  // Helper for rendering contributor badges
+  const renderContributorBadges = (contributorsStr) => {
+    if (!contributorsStr) return <span className="text-[#A09B8E] text-[10px] italic">—</span>;
+    const list = contributorsStr.split(',').map(s => s.trim()).filter(Boolean);
+    if (list.length === 0) return <span className="text-[#A09B8E] text-[10px] italic">—</span>;
+
+    const colors = {
+      minh_quang: 'bg-[#DBEAFE] text-[#1E40AF] border-[#BFDBFE]',
+      hai_phuc: 'bg-[#DCFCE7] text-[#166534] border-[#BBF7D0]',
+      hoang_tran: 'bg-[#F3E8FF] text-[#6B21A8] border-[#E9D8FD]',
+      quoc_huy: 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]',
+      trung_hieu: 'bg-[#FFE4E6] text-[#9F1239] border-[#FECDD3]'
+    };
+
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {list.map(c => {
+          const style = colors[c.toLowerCase()] || 'bg-[#EDE9DF] text-[#1A1917] border-[#DCD6C5]';
+          return (
+            <span key={c} className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border ${style}`}>
+              {c}
+            </span>
+          );
+        })}
+        {list.length > 1 && (
+          <span className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-[#D97706]/10 text-[#D97706] border border-[#D97706]/20 flex items-center gap-0.5" title="Multi-member consensus match">
+            <GitMerge className="w-2.5 h-2.5" />
+            <span>Multi</span>
+          </span>
+        )}
+      </div>
+    );
+  };
+
   // Bulk Actions
   const handleBulkSetStatus = async (status, exclusionReason = null) => {
     const ids = Array.from(selectedPaperIds);
@@ -609,7 +663,8 @@ export default function EvidenceTable({
     }
   };
 
-  const includedCount = papers.filter(p => p.status === 'INCLUDED').length;
+  const masterCount = papers.filter(p => p.is_master_record || p.status === 'MERGED_MASTER' || p.id?.startsWith('M')).length;
+  const personalIncludedCount = papers.filter(p => p.status === 'INCLUDED' && !p.is_master_record && !p.id?.startsWith('M')).length;
   const pendingCount = papers.filter(p => p.status === 'PENDING').length;
   const excludedCount = papers.filter(p => p.status === 'EXCLUDED').length;
   const unsureCount = papers.filter(p => p.ai_decision === 'UNSURE').length;
@@ -668,9 +723,9 @@ export default function EvidenceTable({
         >
           <span className="flex items-center gap-1">
             <CheckCircle2 className="w-3 h-3" />
-            <span>INCLUDED</span>
+            <span>INCLUDED (MINE)</span>
           </span>
-          <span className="bg-[#D4EBD9] text-[#2D7A53] px-1.5 py-0.2 text-[10px]">{includedCount}</span>
+          <span className="bg-[#D4EBD9] text-[#2D7A53] px-1.5 py-0.2 text-[10px]">{personalIncludedCount}</span>
         </button>
 
         <button
@@ -716,6 +771,21 @@ export default function EvidenceTable({
             <span>DUPLICATES</span>
           </span>
           <span className="bg-[#FDE68A] text-[#92400E] px-1.5 py-0.2 text-[10px]">{duplicatesCount}</span>
+        </button>
+
+        <button
+          onClick={() => setFilterStage('TEAM_MERGED')}
+          className={`px-3 py-2 font-bold transition-all border-b-2 flex items-center gap-1.5 ${
+            filterStage === 'TEAM_MERGED'
+              ? 'border-[#0284C7] text-[#0284C7] bg-[#F4F1EA]'
+              : 'border-transparent text-[#7A766F] hover:text-[#1A1917]'
+          }`}
+        >
+          <span className="flex items-center gap-1">
+            <Users className="w-3 h-3 text-[#0284C7]" />
+            <span>TEAM MERGED</span>
+          </span>
+          <span className="bg-[#E0F2FE] text-[#0284C7] px-1.5 py-0.2 text-[10px] font-bold rounded-xs">{masterCount}</span>
         </button>
       </div>
 
@@ -865,6 +935,29 @@ export default function EvidenceTable({
               {pinSelected ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
               <span>Pin Selected {selectedPaperIds.size > 0 ? `(${selectedPaperIds.size})` : ''}</span>
             </button>
+
+            {/* Contributor Filter Dropdown (Visible in TEAM_MERGED tab) */}
+            {filterStage === 'TEAM_MERGED' && (
+              <div className="flex items-center gap-1.5 font-mono text-xs animate-in fade-in duration-150">
+                <span className="text-[#0284C7] text-[11px] font-bold flex items-center gap-1">
+                  <Users className="w-3 h-3 text-[#0284C7]" />
+                  <span>Contributor:</span>
+                </span>
+                <select
+                  value={contributorFilter}
+                  onChange={(e) => setContributorFilter(e.target.value)}
+                  className="bg-[#F0F9FF] border border-[#BAE6FD] px-2 py-1.5 text-xs text-[#0369A1] rounded focus:outline-none focus:border-[#0284C7] cursor-pointer font-bold"
+                >
+                  <option value="ALL">All Contributors ({masterCount})</option>
+                  <option value="minh_quang">🔵 Minh Quang</option>
+                  <option value="hai_phuc">🟢 Hải Phúc</option>
+                  <option value="hoang_tran">🟣 Hoàng Trần</option>
+                  <option value="quoc_huy">🟠 Quốc Huy</option>
+                  <option value="trung_hieu">🔴 Trung Hiếu</option>
+                  <option value="MULTI">👥 Multi-Matches</option>
+                </select>
+              </div>
+            )}
 
             {/* Source Filter Dropdown */}
             <div className="flex items-center gap-1.5 font-mono text-xs">
@@ -1047,6 +1140,9 @@ export default function EvidenceTable({
 
                 <th className="py-2.5 px-3 w-14 text-center">ID</th>
                 <th className="py-2.5 px-3 w-48">Status & AI Verdict</th>
+                {filterStage === 'TEAM_MERGED' && (
+                  <th className="py-2.5 px-3 w-44">Contributors</th>
+                )}
                 <th className="py-2.5 px-4 min-w-[400px]">Paper Metadata (Title • Authors • Venue • Source • DOI)</th>
                 <th className="py-2.5 px-3 w-44">Evidence Matrix (7 Cols)</th>
                 <th className="py-2.5 px-3 w-14 text-right">Actions</th>
@@ -1055,9 +1151,10 @@ export default function EvidenceTable({
             <tbody className="divide-y divide-[#E5E0D3]">
               {filteredPapers.map((paper, index) => {
                 const isSelected = selectedPaperIds.has(paper.id);
-                const isIncluded = paper.status === 'INCLUDED';
+                const isMaster = Boolean(paper.is_master_record || paper.status === 'MERGED_MASTER' || paper.id?.startsWith('M'));
+                const isIncluded = paper.status === 'INCLUDED' || isMaster;
                 const isExcluded = paper.status === 'EXCLUDED';
-                const isExtracted = isIncluded && paper.tool_model && paper.tool_model !== 'N/A';
+                const isExtracted = Boolean(paper.tool_model && paper.tool_model !== 'N/A' && paper.tool_model.trim() !== '');
                 const confidence = Math.round((paper.ai_confidence || 0.85) * 100);
                 const hasValidAbstract = paper.abstract && paper.abstract !== 'N/A' && paper.abstract.trim().length >= 25;
                 const isFetchingThisAbstract = fetchingAbstractId === paper.id;
@@ -1104,29 +1201,41 @@ export default function EvidenceTable({
                       <td className="py-3 px-3">
                         <div className="space-y-1.5">
                           
-                          {/* Status Dropdown */}
-                          <select
-                            value={paper.status}
-                            onChange={(e) => handleStatusChange(paper, e.target.value)}
-                            className={`font-mono text-[10px] font-bold py-1 px-2 border cursor-pointer uppercase transition-all focus:outline-none w-full ${
-                              isIncluded
-                                ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
-                                : isExcluded
-                                ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
-                                : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A]'
-                            }`}
-                          >
-                            <option value="INCLUDED">✓ INCLUDED</option>
-                            <option value="PENDING">⏳ PENDING</option>
-                            <option value="EXCLUDED">✕ EXCLUDED</option>
-                          </select>
+                          {/* Status Badge / Dropdown */}
+                          {paper.is_master_record || paper.status === 'MERGED_MASTER' ? (
+                            <div className="bg-[#E0F2FE] text-[#0369A1] border border-[#BAE6FD] px-2 py-1 font-mono text-[10px] font-bold rounded flex items-center justify-between shadow-2xs">
+                              <span className="flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-[#0284C7]" />
+                                <span>MASTER INCLUDED</span>
+                              </span>
+                              <span className="text-[9px] bg-[#BAE6FD] text-[#0369A1] px-1 rounded">TEAM</span>
+                            </div>
+                          ) : (
+                            <select
+                              value={paper.status}
+                              onChange={(e) => handleStatusChange(paper, e.target.value)}
+                              className={`font-mono text-[10px] font-bold py-1 px-2 border cursor-pointer uppercase transition-all focus:outline-none w-full ${
+                                isIncluded
+                                  ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
+                                  : isExcluded
+                                  ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
+                                  : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A]'
+                              }`}
+                            >
+                              <option value="INCLUDED">✓ INCLUDED</option>
+                              <option value="PENDING">⏳ PENDING</option>
+                              <option value="EXCLUDED">✕ EXCLUDED</option>
+                            </select>
+                          )}
 
                           {/* Compact Clickable AI Decision Pill */}
-                          {(paper.ai_decision || isIncluded || isExcluded) && (
+                          {(paper.ai_decision || isIncluded || isExcluded || paper.is_master_record) && (
                             <div 
                               onClick={() => setSelectedRationalePaper(paper)}
                               className={`border p-1.5 font-mono text-[9px] shadow-2xs cursor-pointer transition-all group rounded ${
-                                isIncluded
+                                paper.is_master_record || paper.status === 'MERGED_MASTER'
+                                  ? 'border-[#BAE6FD] bg-[#F0F9FF] hover:bg-[#E0F2FE]'
+                                  : isIncluded
                                   ? 'border-[#98D4A5] bg-[#F4F9F5] hover:bg-[#EAF5EC]'
                                   : isExcluded
                                   ? 'border-[#F5B7B1] bg-[#FDF4F4] hover:bg-[#FAEAEA]'
@@ -1136,14 +1245,16 @@ export default function EvidenceTable({
                             >
                               <div className="flex items-center justify-between gap-1">
                                 <span className={`px-1.5 py-0.5 font-bold flex items-center gap-1 border rounded ${
-                                  isIncluded
+                                  paper.is_master_record || paper.status === 'MERGED_MASTER'
+                                    ? 'bg-[#E0F2FE] text-[#0369A1] border-[#BAE6FD]'
+                                    : isIncluded
                                     ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5]'
                                     : isExcluded
                                     ? 'bg-[#FADBD8] text-[#C93B2B] border-[#F5B7B1]'
                                     : 'bg-[#E9D8FD] text-[#805AD5] border-[#D6BCFA]'
                                 }`}>
                                   <Sparkles className="w-2.5 h-2.5" />
-                                  <span>{isIncluded ? 'INCLUDED' : isExcluded ? 'EXCLUDED' : paper.ai_decision}</span>
+                                  <span>{paper.is_master_record ? 'MERGED MASTER' : isIncluded ? 'INCLUDED' : isExcluded ? 'EXCLUDED' : paper.ai_decision}</span>
                                 </span>
 
                                 <span className="text-[#7A766F] font-bold">
@@ -1152,17 +1263,17 @@ export default function EvidenceTable({
                               </div>
 
                               {/* Matched ICs badge for INCLUDED papers */}
-                              {isIncluded && (
+                              {(isIncluded || paper.is_master_record) && (
                                 <div className="text-[#2D7A53] truncate pt-1 font-semibold border-t border-[#D4EBD9] mt-1 flex items-center gap-1">
                                   <CheckCircle2 className="w-2.5 h-2.5 text-[#2D7A53] shrink-0" />
                                   <span className="truncate">
-                                    {paper.matched_ics ? `Matched: ${paper.matched_ics}` : 'Eligible under PICO'}
+                                    {paper.is_master_record ? `Consensus Included` : paper.matched_ics ? `Matched: ${paper.matched_ics}` : 'Eligible under PICO'}
                                   </span>
                                 </div>
                               )}
 
                               {/* Exclusion reason ONLY for EXCLUDED papers (NEVER show for INCLUDED papers!) */}
-                              {!isIncluded && isExcluded && paper.exclusion_reason && (
+                              {!isIncluded && isExcluded && paper.exclusion_reason && !paper.is_master_record && (
                                 <div className="text-[#C93B2B] truncate pt-1 font-semibold border-t border-[#F5B7B1] mt-1">
                                   {paper.exclusion_reason}
                                 </div>
@@ -1170,8 +1281,8 @@ export default function EvidenceTable({
                             </div>
                           )}
 
-                          {/* Duplicate Alert Pill */}
-                          {paper.duplicate_flag && (
+                          {/* Duplicate Alert Pill (Never shown on Master papers) */}
+                          {paper.duplicate_flag && !paper.is_master_record && !paper.id.startsWith('M') && filterStage !== 'TEAM_MERGED' && (
                             <button
                               onClick={() => onOpenDuplicateCompare(paper, paper.duplicate_with_id)}
                               className="w-full bg-[#FEF3C7] border border-[#FDE68A] text-[#B8860B] p-1 font-mono text-[9px] font-bold flex items-center justify-between hover:bg-[#FDE68A] transition-colors rounded"
@@ -1186,6 +1297,13 @@ export default function EvidenceTable({
 
                         </div>
                       </td>
+
+                      {/* Optional Contributors Column in TEAM_MERGED tab */}
+                      {filterStage === 'TEAM_MERGED' && (
+                        <td className="py-3 px-3 w-44">
+                          {renderContributorBadges(paper.contributors)}
+                        </td>
+                      )}
 
                       {/* Col 4: 4-Tier High-Clarity Editorial Paper Metadata */}
                       <td className="py-3 px-4">
@@ -1324,11 +1442,11 @@ export default function EvidenceTable({
 
                       {/* Col 5: Evidence Extraction Status (7 Cols) */}
                       <td className="py-3 px-3 font-mono text-xs">
-                        {isIncluded ? (
+                        {(isIncluded || isMaster) ? (
                           <div className="space-y-1">
                             <button
                               onClick={() => onOpenExtraction(paper)}
-                              className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded ${
+                              className={`px-2 py-1 border flex items-center gap-1 text-[10px] font-bold transition-all shadow-2xs rounded cursor-pointer ${
                                 isExtracted
                                   ? 'bg-[#D4EBD9] text-[#2D7A53] border-[#98D4A5] hover:bg-[#C2E4C9]'
                                   : 'bg-[#FEF3C7] text-[#B8860B] border-[#FDE68A] hover:bg-[#FDE68A]'
@@ -1338,11 +1456,18 @@ export default function EvidenceTable({
                               <span>{isExtracted ? 'Edit 7-Col Matrix' : '+ Extract Evidence'}</span>
                             </button>
 
-                            {isExtracted && (
-                              <div className="text-[9px] text-[#4A4843] space-y-0.5 bg-[#FDFCF9] p-1.5 border border-[#DCD6C5] rounded">
-                                <div className="truncate">Model: <strong>{paper.tool_model}</strong></div>
-                                <div className="truncate">Results: <strong>{paper.empirical_results}</strong></div>
+                            {isExtracted ? (
+                              <div className="text-[9px] text-[#4A4843] space-y-0.5 bg-[#FDFCF9] p-1.5 border border-[#DCD6C5] rounded max-w-[280px]">
+                                <div className="truncate" title={paper.tool_model}>Model: <strong>{paper.tool_model}</strong></div>
+                                {paper.dataset_name && paper.dataset_name !== 'N/A' && (
+                                  <div className="truncate text-[#7A766F]" title={paper.dataset_name}>Data: {paper.dataset_name}</div>
+                                )}
+                                {paper.empirical_results && paper.empirical_results !== 'N/A' && (
+                                  <div className="truncate text-[#2D7A53] font-semibold" title={paper.empirical_results}>Results: {paper.empirical_results}</div>
+                                )}
                               </div>
+                            ) : (
+                              <span className="text-[10px] text-[#A09B8E] italic block pt-0.5">Not extracted yet</span>
                             )}
                           </div>
                         ) : (
@@ -1365,7 +1490,7 @@ export default function EvidenceTable({
                     {/* Visual Section Divider between Pinned Selected papers and remaining corpus */}
                     {isDividerRow && (
                       <tr className="bg-[#EDE9DF] border-y-2 border-[#1A1917]/20 select-none">
-                        <td colSpan={6} className="py-1.5 px-4 font-mono text-[10px] font-bold text-[#7A766F] text-center uppercase tracking-wider">
+                        <td colSpan={filterStage === 'TEAM_MERGED' ? 7 : 6} className="py-1.5 px-4 font-mono text-[10px] font-bold text-[#7A766F] text-center uppercase tracking-wider">
                           ─── End of Pinned Selection ({lastPinnedIndex + 1} Papers) • Remaining Records Below ───
                         </td>
                       </tr>
@@ -1391,6 +1516,13 @@ export default function EvidenceTable({
                       <td className="py-4 px-3 w-32">
                         <div className="w-24 h-6 bg-[#DCD6C5] rounded-full"></div>
                       </td>
+
+                      {/* Optional Col for Contributors */}
+                      {filterStage === 'TEAM_MERGED' && (
+                        <td className="py-4 px-3 w-44">
+                          <div className="w-28 h-5 bg-[#DCD6C5] rounded"></div>
+                        </td>
+                      )}
 
                       {/* Col 3: AI Screening Rationale */}
                       <td className="py-4 px-3 w-40">
@@ -1429,7 +1561,7 @@ export default function EvidenceTable({
               {/* 2. Completely Empty Corpus (Zero papers in SQLite) */}
               {!isLoading && papers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-16 px-4 text-center select-none">
+                  <td colSpan={filterStage === 'TEAM_MERGED' ? 7 : 6} className="py-16 px-4 text-center select-none">
                     <div className="max-w-md mx-auto space-y-4 bg-[#EFECE4] border-2 border-dashed border-[#C8C1AE] p-8 rounded-lg">
                       <div className="w-12 h-12 bg-[#DCD6C5] rounded-full flex items-center justify-center mx-auto text-[#7A766F]">
                         <BookOpen className="w-6 h-6" />
@@ -1468,7 +1600,7 @@ export default function EvidenceTable({
               {/* 3. Filter / Search Mismatch (Corpus has papers, but current filters matched 0) */}
               {!isLoading && papers.length > 0 && filteredPapers.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="py-14 px-4 text-center select-none">
+                  <td colSpan={filterStage === 'TEAM_MERGED' ? 7 : 6} className="py-14 px-4 text-center select-none">
                     <div className="max-w-md mx-auto space-y-3 bg-[#FAF8F5] border border-[#DCD6C5] p-6 rounded-lg font-mono">
                       <div className="w-10 h-10 bg-[#FEF3C7] rounded-full flex items-center justify-center mx-auto text-[#B8860B]">
                         <Filter className="w-5 h-5" />
@@ -1626,6 +1758,18 @@ export default function EvidenceTable({
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>AI Screen ({selectedPaperIds.size})</span>
+            </button>
+          )}
+
+          {/* Bulk AI Evidence Extraction */}
+          {onBulkExtractEvidence && (
+            <button
+              onClick={() => onBulkExtractEvidence(Array.from(selectedPaperIds))}
+              className="bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white px-3.5 py-1.5 font-bold flex items-center gap-1.5 transition-all border border-orange-500 shadow-sm cursor-pointer"
+              title="Run 7-column empirical AI evidence extraction for all selected papers"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Bulk Extract Evidence ({selectedPaperIds.size})</span>
             </button>
           )}
 

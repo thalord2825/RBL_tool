@@ -23,7 +23,8 @@ from .schemas import (
     UpdateAbstractRequest,
     FetchMetadataRequest,
     AddManualPaperRequest,
-    ExtractEvidenceRequest
+    ExtractEvidenceRequest,
+    BulkExtractEvidenceRequest
 )
 from .database import Database
 from .crawlers import (
@@ -39,6 +40,7 @@ from .engine.rbl_exporter import RblExporter
 from .engine.github_atomic import GitHubAtomicCommitter
 from .engine.abstract_resolver import AbstractResolver
 from .engine.metadata_fetcher import MetadataFetcher
+from .engine.team_merger import TeamSlrMerger
 
 # Setup structured logging
 logging.basicConfig(
@@ -803,6 +805,155 @@ def stream_paper_evidence_extraction(req: ExtractEvidenceRequest):
         ),
         media_type="text/event-stream"
     )
+
+@app.post("/api/stream/bulk-extract-evidence")
+def stream_bulk_evidence_extraction(req: BulkExtractEvidenceRequest):
+    """
+    Server-Sent Events (SSE) streaming endpoint for batch evidence extraction across multiple selected papers.
+    """
+    if not req.paper_ids:
+        def err_stream():
+            yield f"data: {json.dumps({'event': 'error', 'message': 'No paper IDs provided for bulk extraction.'})}\n\n"
+        return StreamingResponse(err_stream(), media_type="text/event-stream")
+
+    return StreamingResponse(
+        GeminiScreener.stream_bulk_extract_evidence(
+            paper_ids=req.paper_ids,
+            project_id=req.project_id,
+            api_key=req.api_key,
+            model_name=req.model_name,
+            delay_ms=req.delay_ms or 400
+        ),
+        media_type="text/event-stream"
+    )
+
+class TeamMergeRequest(BaseModel):
+    repo_path: str = r"C:\Users\USER\RBL_ScamShield"
+    project_id: str = "default"
+
+@app.get("/api/team/members")
+def get_team_members_summary(repo_path: str = r"C:\Users\USER\RBL_ScamShield"):
+    """
+    Scans local RBL_ScamShield repository and returns progress metrics for each team member.
+    """
+    try:
+        return {
+            "status": "success",
+            "repo_path": repo_path,
+            "members": TeamSlrMerger.get_members_summary(repo_path)
+        }
+    except Exception as e:
+        logger.error(f"Failed to scan team members: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/team/merge")
+def merge_team_slr_corpus(req: TeamMergeRequest):
+    """
+    Cross-matches and deduplicates included candidate papers across all 5 team members,
+    merging their 7-column evidence extractions into a master matrix.
+    """
+    try:
+        result = TeamSlrMerger.merge_team_slr(req.repo_path)
+        return {
+            "status": "success",
+            "repo_path": req.repo_path,
+            **result
+        }
+    except Exception as e:
+        logger.error(f"Failed to merge team SLR corpus: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/team/sync-to-corpus")
+def sync_master_to_active_corpus(req: TeamMergeRequest):
+    """
+    Imports the merged deduplicated master papers into the active project SQLite corpus
+    with status='MERGED_MASTER' and is_master_record=1, while resetting personal INCLUDED to exactly 5 papers.
+    """
+    try:
+        # 1. Identify personal included papers (from trung_hieu/SLR/03_final_included.csv)
+        personal_inc_file = os.path.join(req.repo_path, "trung_hieu", "SLR", "03_final_included.csv")
+        personal_included_ids = set()
+        personal_included_titles = set()
+        if os.path.exists(personal_inc_file):
+            with open(personal_inc_file, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    pid = (r.get('id') or r.get('ID') or '').strip()
+                    if pid:
+                        personal_included_ids.add(pid)
+                    t = (r.get('title') or r.get('Title') or '').strip()
+                    if t:
+                        personal_included_titles.add(DeduplicationEngine.normalize_title(t))
+
+        # 2. Reset non-master papers so personal INCLUDED has only the personal 5 papers
+        existing_papers = Database.get_all_papers(req.project_id)
+        personal_updates = []
+        matched_personal_titles = set()
+        for ep in existing_papers:
+            if not ep.get("id", "").startswith("M") and not ep.get("is_master_record"):
+                ep_id = ep.get("id", "")
+                ep_norm = DeduplicationEngine.normalize_title(ep.get("title", ""))
+                if (ep_id in personal_included_ids or ep_norm in personal_included_titles) and ep_norm not in matched_personal_titles:
+                    ep["status"] = "INCLUDED"
+                    ep["is_master_record"] = 0
+                    matched_personal_titles.add(ep_norm)
+                    personal_updates.append(ep)
+                elif ep.get("status") in ["INCLUDED", "MERGED_MASTER"]:
+                    ep["status"] = "PENDING"
+                    ep["is_master_record"] = 0
+                    personal_updates.append(ep)
+
+        if personal_updates:
+            Database.save_papers(personal_updates, project_id=req.project_id)
+
+        # 3. Merge master team corpus and save as MERGED_MASTER records with contributors
+        result = TeamSlrMerger.merge_team_slr(req.repo_path)
+        master_papers = result.get("master_papers", [])
+
+        papers_to_save = []
+        for p in master_papers:
+            contrib_list = p.get("contributors", [])
+            contrib_str = ", ".join(contrib_list) if isinstance(contrib_list, list) else str(contrib_list)
+            paper_obj = {
+                "id": p["master_id"],
+                "title": p["title"],
+                "authors": p.get("authors", "N/A"),
+                "year": p.get("year", 2024),
+                "venue": p.get("venue", "N/A"),
+                "doi": p.get("doi", ""),
+                "url": p.get("url", ""),
+                "abstract": p.get("abstract", "N/A"),
+                "source": "Team SLR Master",
+                "status": "MERGED_MASTER",
+                "is_master_record": 1,
+                "contributors": contrib_str,
+                "tool_model": p.get("tool_model", "N/A"),
+                "dataset_name": p.get("dataset_name", "N/A"),
+                "sample_size_n": p.get("sample_size_n", "N/A"),
+                "metrics_evaluated": p.get("metrics_evaluated", "N/A"),
+                "empirical_results": p.get("empirical_results", "N/A"),
+                "code_url": p.get("code_url", "N/A"),
+                "limitations": p.get("limitations", "N/A"),
+                "ai_decision": "MERGED_MASTER",
+                "ai_confidence": 1.0,
+                "ai_rationale": f"Synthesized from team contributors: {contrib_str}"
+            }
+            papers_to_save.append(paper_obj)
+
+        added_count = Database.save_papers(papers_to_save, project_id=req.project_id)
+        all_papers = Database.get_all_papers(req.project_id)
+        flagged = DeduplicationEngine.flag_corpus_duplicates(all_papers)
+
+        return {
+            "status": "synced",
+            "imported_count": len(papers_to_save),
+            "total_papers": len(flagged),
+            "papers": flagged
+        }
+    except Exception as e:
+        logger.error(f"Failed to sync master papers to corpus: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

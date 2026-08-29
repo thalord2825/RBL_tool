@@ -1,5 +1,4 @@
-import React from 'react';
-import { Download, GitCommit, RefreshCw, Sparkles, Sliders, Activity, FileSpreadsheet, PlusCircle } from 'lucide-react';
+import { Download, GitCommit, RefreshCw, Sparkles, Sliders, Activity, FileSpreadsheet, PlusCircle, GitMerge, Users } from 'lucide-react';
 
 export default function TopHeader({ 
   totalCount,
@@ -20,6 +19,7 @@ export default function TopHeader({
   onOpenProtocolModal,
   onOpenCsvImport,
   onOpenAddPaper,
+  onOpenTeamMerge,
   onOpenGitSettings, 
   onOpenExportModal,
   onRefreshCorpus,
@@ -101,6 +101,16 @@ export default function TopHeader({
         >
           <PlusCircle className="w-3.5 h-3.5 text-[#4ADE80]" />
           <span>+ Add Paper</span>
+        </button>
+
+        {/* Team SLR Merger Button */}
+        <button
+          onClick={onOpenTeamMerge}
+          className="bg-[#1E1B4B] hover:bg-[#2E1065] text-[#C4B5FD] hover:text-white border border-[#6366F1] font-mono text-[11px] py-1.5 px-2.5 flex items-center gap-1.5 transition-colors font-bold shadow-2xs cursor-pointer"
+          title="Merge & Deduplicate 5 Team Member SLR Streams, Synthesize Master Matrix and Gap Analysis"
+        >
+          <GitMerge className="w-3.5 h-3.5 text-[#A78BFA]" />
+          <span>Team SLR</span>
         </button>
 
         {/* AI Auto-Screen Button */}
