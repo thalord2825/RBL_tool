@@ -850,7 +850,7 @@ def sync_master_to_active_corpus(req: TeamMergeRequest):
         result = TeamSlrMerger.merge_team_slr(req.repo_path)
         master_papers = result.get("master_papers", [])
 
-        added_count = 0
+        papers_to_save = []
         for p in master_papers:
             # Build paper object for SQLite
             paper_obj = {
@@ -861,7 +861,7 @@ def sync_master_to_active_corpus(req: TeamMergeRequest):
                 "venue": p.get("venue", "N/A"),
                 "doi": p.get("doi", ""),
                 "url": p.get("url", ""),
-                "abstract": "N/A",
+                "abstract": p.get("abstract", "N/A"),
                 "source": "Team SLR Merger",
                 "status": "INCLUDED",
                 "tool_model": p.get("tool_model", "N/A"),
@@ -873,17 +873,17 @@ def sync_master_to_active_corpus(req: TeamMergeRequest):
                 "limitations": p.get("limitations", "N/A"),
                 "ai_decision": "INCLUDED",
                 "ai_confidence": 1.0,
-                "ai_reasoning": f"Synthesized from team members: {', '.join(p.get('contributors', []))}"
+                "ai_rationale": f"Synthesized from team members: {', '.join(p.get('contributors', []))}"
             }
-            Database.upsert_paper(paper_obj, project_id=req.project_id)
-            added_count += 1
+            papers_to_save.append(paper_obj)
 
+        added_count = Database.save_papers(papers_to_save, project_id=req.project_id)
         all_papers = Database.get_all_papers(req.project_id)
         flagged = DeduplicationEngine.flag_corpus_duplicates(all_papers)
 
         return {
             "status": "synced",
-            "imported_count": added_count,
+            "imported_count": len(papers_to_save),
             "total_papers": len(flagged),
             "papers": flagged
         }

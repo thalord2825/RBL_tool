@@ -97,12 +97,30 @@ class TeamSlrMerger:
     def merge_team_slr(cls, repo_path: str = DEFAULT_REPO_PATH) -> Dict[str, Any]:
         all_included = []
         global_evidence_map = {}
+        abstract_map = {}
 
+        # 1. Parse all evidence tables
         for m in cls.MEMBERS:
             ev_file = os.path.join(repo_path, m, "SLR", "evidence-table.md")
             m_ev = cls.parse_evidence_table(ev_file)
             global_evidence_map.update(m_ev)
 
+        # 2. Collect abstracts from all records across members
+        for m in cls.MEMBERS:
+            for fname in ["01_all_records.csv", "02_after_screening_v1.csv"]:
+                f_path = os.path.join(repo_path, m, "SLR", fname)
+                if os.path.exists(f_path):
+                    with open(f_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            t = (row.get('title') or row.get('Title') or '').strip()
+                            ab = (row.get('abstract') or row.get('Abstract') or '').strip()
+                            if t and ab and ab.lower() not in ["n/a", "none", ""]:
+                                norm_t = DeduplicationEngine.normalize_title(t)
+                                if norm_t not in abstract_map:
+                                    abstract_map[norm_t] = ab
+
+        # 3. Collect included papers
         for m in cls.MEMBERS:
             inc_file = os.path.join(repo_path, m, "SLR", "03_final_included.csv")
             if os.path.exists(inc_file):
@@ -121,6 +139,7 @@ class TeamSlrMerger:
                             "venue": (r.get('venue') or r.get('Venue') or 'N/A').strip(),
                             "doi": (r.get('doi') or r.get('DOI') or 'N/A').strip(),
                             "url": (r.get('url') or r.get('URL') or '').strip(),
+                            "abstract": (r.get('abstract') or r.get('Abstract') or '').strip(),
                             "status": "INCLUDED"
                         })
 
@@ -156,6 +175,7 @@ class TeamSlrMerger:
                 p_copy['master_id'] = f"M{len(master_papers)+1:03d}"
                 p_copy['contributors'] = [p['member']]
 
+                # Attach evidence
                 matched_ev = None
                 for ev_k, ev_v in global_evidence_map.items():
                     if DeduplicationEngine.title_similarity(p['title'], ev_v['title']) >= 0.88:
@@ -171,6 +191,19 @@ class TeamSlrMerger:
                 p_copy['limitations'] = matched_ev['limitations'] if matched_ev else "N/A"
                 if matched_ev and matched_ev.get('url') and not p_copy['url']:
                     p_copy['url'] = matched_ev['url']
+
+                # Attach abstract
+                if not p_copy.get('abstract') or p_copy.get('abstract').lower() in ["n/a", "none", ""]:
+                    if p_norm_title in abstract_map:
+                        p_copy['abstract'] = abstract_map[p_norm_title]
+                    else:
+                        for ab_k, ab_v in abstract_map.items():
+                            if DeduplicationEngine.title_similarity(p['title'], ab_k) >= 0.88:
+                                p_copy['abstract'] = ab_v
+                                break
+
+                if not p_copy.get('abstract'):
+                    p_copy['abstract'] = "N/A"
 
                 master_papers.append(p_copy)
 
