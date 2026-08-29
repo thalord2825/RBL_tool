@@ -76,6 +76,7 @@ export default function EvidenceTable({
   const [selectedSource, setSelectedSource] = useState('ALL');
   const [authorFilter, setAuthorFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('ALL');
+  const [contributorFilter, setContributorFilter] = useState('ALL');
   const [sortBy, setSortBy] = useState('UNSCREENED_FIRST'); // 'UNSCREENED_FIRST' | 'NEWEST_HARVEST' | 'YEAR_DESC' | 'YEAR_ASC' | 'TITLE_AZ' | 'CITATIONS_DESC'
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
 
@@ -171,11 +172,29 @@ export default function EvidenceTable({
   const filteredPapers = useMemo(() => {
     let result = papers.filter(paper => {
       if (!paper) return false;
-      if (filterStage === 'INCLUDED' && paper.status !== 'INCLUDED') return false;
-      if (filterStage === 'PENDING' && paper.status !== 'PENDING') return false;
-      if (filterStage === 'EXCLUDED' && paper.status !== 'EXCLUDED') return false;
-      if (filterStage === 'UNSURE' && paper.ai_decision !== 'UNSURE') return false;
-      if (filterStage === 'DUPLICATES' && !paper.duplicate_flag) return false;
+      // Filter by Stage / Space
+      if (filterStage === 'INCLUDED') {
+        // Only personal included papers
+        if (paper.status !== 'INCLUDED' || paper.is_master_record || paper.id?.startsWith('M')) return false;
+      } else if (filterStage === 'TEAM_MERGED') {
+        // Only Master papers from Team SLR
+        if (!paper.is_master_record && paper.status !== 'MERGED_MASTER' && !paper.id?.startsWith('M')) return false;
+        
+        // Contributor filter inside TEAM_MERGED tab
+        if (contributorFilter === 'MULTI') {
+          if (!paper.contributors || !paper.contributors.includes(',')) return false;
+        } else if (contributorFilter !== 'ALL') {
+          if (!paper.contributors || !paper.contributors.toLowerCase().includes(contributorFilter.toLowerCase())) return false;
+        }
+      } else if (filterStage === 'PENDING') {
+        if (paper.status !== 'PENDING') return false;
+      } else if (filterStage === 'EXCLUDED') {
+        if (paper.status !== 'EXCLUDED') return false;
+      } else if (filterStage === 'UNSURE') {
+        if (paper.ai_decision !== 'UNSURE') return false;
+      } else if (filterStage === 'DUPLICATES') {
+        if (!paper.duplicate_flag) return false;
+      }
 
       // Source Filter
       if (selectedSource !== 'ALL' && paper.source !== selectedSource) return false;
@@ -250,7 +269,7 @@ export default function EvidenceTable({
     });
 
     return result;
-  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, sortBy, pinSelected, selectedPaperIds]);
+  }, [papers, filterStage, searchTerm, selectedSource, authorFilter, yearFilter, contributorFilter, sortBy, pinSelected, selectedPaperIds]);
 
   const visibleIds = filteredPapers.map(p => p.id);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedPaperIds.has(id));
@@ -560,6 +579,40 @@ export default function EvidenceTable({
     }
   };
 
+  // Helper for rendering contributor badges
+  const renderContributorBadges = (contributorsStr) => {
+    if (!contributorsStr) return <span className="text-[#A09B8E] text-[10px] italic">—</span>;
+    const list = contributorsStr.split(',').map(s => s.trim()).filter(Boolean);
+    if (list.length === 0) return <span className="text-[#A09B8E] text-[10px] italic">—</span>;
+
+    const colors = {
+      minh_quang: 'bg-[#DBEAFE] text-[#1E40AF] border-[#BFDBFE]',
+      hai_phuc: 'bg-[#DCFCE7] text-[#166534] border-[#BBF7D0]',
+      hoang_tran: 'bg-[#F3E8FF] text-[#6B21A8] border-[#E9D8FD]',
+      quoc_huy: 'bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]',
+      trung_hieu: 'bg-[#FFE4E6] text-[#9F1239] border-[#FECDD3]'
+    };
+
+    return (
+      <div className="flex flex-wrap items-center gap-1">
+        {list.map(c => {
+          const style = colors[c.toLowerCase()] || 'bg-[#EDE9DF] text-[#1A1917] border-[#DCD6C5]';
+          return (
+            <span key={c} className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border ${style}`}>
+              {c}
+            </span>
+          );
+        })}
+        {list.length > 1 && (
+          <span className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-[#D97706]/10 text-[#D97706] border border-[#D97706]/20 flex items-center gap-0.5" title="Multi-member consensus match">
+            <GitMerge className="w-2.5 h-2.5" />
+            <span>Multi</span>
+          </span>
+        )}
+      </div>
+    );
+  };
+
   // Bulk Actions
   const handleBulkSetStatus = async (status, exclusionReason = null) => {
     const ids = Array.from(selectedPaperIds);
@@ -610,7 +663,8 @@ export default function EvidenceTable({
     }
   };
 
-  const includedCount = papers.filter(p => p.status === 'INCLUDED').length;
+  const masterCount = papers.filter(p => p.is_master_record || p.status === 'MERGED_MASTER' || p.id?.startsWith('M')).length;
+  const personalIncludedCount = papers.filter(p => p.status === 'INCLUDED' && !p.is_master_record && !p.id?.startsWith('M')).length;
   const pendingCount = papers.filter(p => p.status === 'PENDING').length;
   const excludedCount = papers.filter(p => p.status === 'EXCLUDED').length;
   const unsureCount = papers.filter(p => p.ai_decision === 'UNSURE').length;
@@ -669,9 +723,9 @@ export default function EvidenceTable({
         >
           <span className="flex items-center gap-1">
             <CheckCircle2 className="w-3 h-3" />
-            <span>INCLUDED</span>
+            <span>INCLUDED (MINE)</span>
           </span>
-          <span className="bg-[#D4EBD9] text-[#2D7A53] px-1.5 py-0.2 text-[10px]">{includedCount}</span>
+          <span className="bg-[#D4EBD9] text-[#2D7A53] px-1.5 py-0.2 text-[10px]">{personalIncludedCount}</span>
         </button>
 
         <button
@@ -717,6 +771,21 @@ export default function EvidenceTable({
             <span>DUPLICATES</span>
           </span>
           <span className="bg-[#FDE68A] text-[#92400E] px-1.5 py-0.2 text-[10px]">{duplicatesCount}</span>
+        </button>
+
+        <button
+          onClick={() => setFilterStage('TEAM_MERGED')}
+          className={`px-3 py-2 font-bold transition-all border-b-2 flex items-center gap-1.5 ${
+            filterStage === 'TEAM_MERGED'
+              ? 'border-[#0284C7] text-[#0284C7] bg-[#F4F1EA]'
+              : 'border-transparent text-[#7A766F] hover:text-[#1A1917]'
+          }`}
+        >
+          <span className="flex items-center gap-1">
+            <Users className="w-3 h-3 text-[#0284C7]" />
+            <span>TEAM MERGED</span>
+          </span>
+          <span className="bg-[#E0F2FE] text-[#0284C7] px-1.5 py-0.2 text-[10px] font-bold rounded-xs">{masterCount}</span>
         </button>
       </div>
 
@@ -866,6 +935,29 @@ export default function EvidenceTable({
               {pinSelected ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
               <span>Pin Selected {selectedPaperIds.size > 0 ? `(${selectedPaperIds.size})` : ''}</span>
             </button>
+
+            {/* Contributor Filter Dropdown (Visible in TEAM_MERGED tab) */}
+            {filterStage === 'TEAM_MERGED' && (
+              <div className="flex items-center gap-1.5 font-mono text-xs animate-in fade-in duration-150">
+                <span className="text-[#0284C7] text-[11px] font-bold flex items-center gap-1">
+                  <Users className="w-3 h-3 text-[#0284C7]" />
+                  <span>Contributor:</span>
+                </span>
+                <select
+                  value={contributorFilter}
+                  onChange={(e) => setContributorFilter(e.target.value)}
+                  className="bg-[#F0F9FF] border border-[#BAE6FD] px-2 py-1.5 text-xs text-[#0369A1] rounded focus:outline-none focus:border-[#0284C7] cursor-pointer font-bold"
+                >
+                  <option value="ALL">All Contributors ({masterCount})</option>
+                  <option value="minh_quang">🔵 Minh Quang</option>
+                  <option value="hai_phuc">🟢 Hải Phúc</option>
+                  <option value="hoang_tran">🟣 Hoàng Trần</option>
+                  <option value="quoc_huy">🟠 Quốc Huy</option>
+                  <option value="trung_hieu">🔴 Trung Hiếu</option>
+                  <option value="MULTI">👥 Multi-Matches</option>
+                </select>
+              </div>
+            )}
 
             {/* Source Filter Dropdown */}
             <div className="flex items-center gap-1.5 font-mono text-xs">
@@ -1048,6 +1140,9 @@ export default function EvidenceTable({
 
                 <th className="py-2.5 px-3 w-14 text-center">ID</th>
                 <th className="py-2.5 px-3 w-48">Status & AI Verdict</th>
+                {filterStage === 'TEAM_MERGED' && (
+                  <th className="py-2.5 px-3 w-44">Contributors</th>
+                )}
                 <th className="py-2.5 px-4 min-w-[400px]">Paper Metadata (Title • Authors • Venue • Source • DOI)</th>
                 <th className="py-2.5 px-3 w-44">Evidence Matrix (7 Cols)</th>
                 <th className="py-2.5 px-3 w-14 text-right">Actions</th>

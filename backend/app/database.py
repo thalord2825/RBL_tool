@@ -53,6 +53,8 @@ class Database:
                 duplicate_flag INTEGER DEFAULT 0,
                 duplicate_with_id TEXT,
                 duplicate_reason TEXT,
+                contributors TEXT DEFAULT '',
+                is_master_record INTEGER DEFAULT 0,
                 created_at TEXT
             )
             """)
@@ -69,7 +71,9 @@ class Database:
                 "duplicate_with_id": "TEXT",
                 "duplicate_reason": "TEXT",
                 "duplicate_resolved": "INTEGER DEFAULT 0",
-                "matched_ics": "TEXT"
+                "matched_ics": "TEXT",
+                "contributors": "TEXT DEFAULT ''",
+                "is_master_record": "INTEGER DEFAULT 0"
             }
             for col_name, col_type in new_cols.items():
                 if col_name not in columns:
@@ -159,6 +163,7 @@ class Database:
                 d = dict(row)
                 d["duplicate_flag"] = bool(d.get("duplicate_flag", 0))
                 d["duplicate_resolved"] = bool(d.get("duplicate_resolved", 0))
+                d["is_master_record"] = bool(d.get("is_master_record", 0))
                 papers.append(d)
             return papers
 
@@ -182,7 +187,7 @@ class Database:
                         
                         # Clean exclusion reason if included
                         status_val = p.get("status", "PENDING")
-                        ex_reason = None if status_val == "INCLUDED" else p.get("exclusion_reason")
+                        ex_reason = None if status_val in ["INCLUDED", "MERGED_MASTER"] else p.get("exclusion_reason")
                         
                         cursor.execute("""
                         INSERT OR REPLACE INTO papers (
@@ -191,8 +196,9 @@ class Database:
                             relevance_notes, tool_model, dataset_name, sample_size_n,
                             metrics_evaluated, empirical_results, code_url, limitations,
                             ai_decision, ai_confidence, ai_rationale,
-                            duplicate_flag, duplicate_with_id, duplicate_reason, duplicate_resolved, matched_ics, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            duplicate_flag, duplicate_with_id, duplicate_reason, duplicate_resolved, matched_ics,
+                            contributors, is_master_record, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             p_id,
                             project_id,
@@ -223,6 +229,8 @@ class Database:
                             p.get("duplicate_reason"),
                             1 if p.get("duplicate_resolved") else 0,
                             p.get("matched_ics"),
+                            p.get("contributors", ""),
+                            1 if p.get("is_master_record") else 0,
                             created_at
                         ))
                         inserted += 1

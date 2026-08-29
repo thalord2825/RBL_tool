@@ -866,15 +866,54 @@ def merge_team_slr_corpus(req: TeamMergeRequest):
 @app.post("/api/team/sync-to-corpus")
 def sync_master_to_active_corpus(req: TeamMergeRequest):
     """
-    Imports the merged deduplicated master papers into the active project SQLite corpus.
+    Imports the merged deduplicated master papers into the active project SQLite corpus
+    with status='MERGED_MASTER' and is_master_record=1, while resetting personal INCLUDED to exactly 5 papers.
     """
     try:
+        # 1. Identify personal included papers (from trung_hieu/SLR/03_final_included.csv)
+        personal_inc_file = os.path.join(req.repo_path, "trung_hieu", "SLR", "03_final_included.csv")
+        personal_included_ids = set()
+        personal_included_titles = set()
+        if os.path.exists(personal_inc_file):
+            with open(personal_inc_file, 'r', encoding='utf-8', errors='ignore') as f:
+                reader = csv.DictReader(f)
+                for r in reader:
+                    pid = (r.get('id') or r.get('ID') or '').strip()
+                    if pid:
+                        personal_included_ids.add(pid)
+                    t = (r.get('title') or r.get('Title') or '').strip()
+                    if t:
+                        personal_included_titles.add(DeduplicationEngine.normalize_title(t))
+
+        # 2. Reset non-master papers so personal INCLUDED has only the personal 5 papers
+        existing_papers = Database.get_all_papers(req.project_id)
+        personal_updates = []
+        matched_personal_titles = set()
+        for ep in existing_papers:
+            if not ep.get("id", "").startswith("M") and not ep.get("is_master_record"):
+                ep_id = ep.get("id", "")
+                ep_norm = DeduplicationEngine.normalize_title(ep.get("title", ""))
+                if (ep_id in personal_included_ids or ep_norm in personal_included_titles) and ep_norm not in matched_personal_titles:
+                    ep["status"] = "INCLUDED"
+                    ep["is_master_record"] = 0
+                    matched_personal_titles.add(ep_norm)
+                    personal_updates.append(ep)
+                elif ep.get("status") in ["INCLUDED", "MERGED_MASTER"]:
+                    ep["status"] = "PENDING"
+                    ep["is_master_record"] = 0
+                    personal_updates.append(ep)
+
+        if personal_updates:
+            Database.save_papers(personal_updates, project_id=req.project_id)
+
+        # 3. Merge master team corpus and save as MERGED_MASTER records with contributors
         result = TeamSlrMerger.merge_team_slr(req.repo_path)
         master_papers = result.get("master_papers", [])
 
         papers_to_save = []
         for p in master_papers:
-            # Build paper object for SQLite
+            contrib_list = p.get("contributors", [])
+            contrib_str = ", ".join(contrib_list) if isinstance(contrib_list, list) else str(contrib_list)
             paper_obj = {
                 "id": p["master_id"],
                 "title": p["title"],
@@ -884,8 +923,10 @@ def sync_master_to_active_corpus(req: TeamMergeRequest):
                 "doi": p.get("doi", ""),
                 "url": p.get("url", ""),
                 "abstract": p.get("abstract", "N/A"),
-                "source": "Team SLR Merger",
-                "status": "INCLUDED",
+                "source": "Team SLR Master",
+                "status": "MERGED_MASTER",
+                "is_master_record": 1,
+                "contributors": contrib_str,
                 "tool_model": p.get("tool_model", "N/A"),
                 "dataset_name": p.get("dataset_name", "N/A"),
                 "sample_size_n": p.get("sample_size_n", "N/A"),
@@ -893,9 +934,9 @@ def sync_master_to_active_corpus(req: TeamMergeRequest):
                 "empirical_results": p.get("empirical_results", "N/A"),
                 "code_url": p.get("code_url", "N/A"),
                 "limitations": p.get("limitations", "N/A"),
-                "ai_decision": "INCLUDED",
+                "ai_decision": "MERGED_MASTER",
                 "ai_confidence": 1.0,
-                "ai_rationale": f"Synthesized from team members: {', '.join(p.get('contributors', []))}"
+                "ai_rationale": f"Synthesized from team contributors: {contrib_str}"
             }
             papers_to_save.append(paper_obj)
 
